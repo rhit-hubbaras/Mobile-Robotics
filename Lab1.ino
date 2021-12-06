@@ -113,11 +113,90 @@ void setup()
 //wheelbase radius = 3.76 in
 void loop()
 {
+  stepperRight.setMaxSpeed(1000);
+  stepperLeft.setMaxSpeed(1000);
+//  forward(12/1.66/2/PI*800);
+//  delay(2000);
+//  forward(-12/1.66/2/PI*800);
+//  delay(2000);
+//
+//  stepperRight.setMaxSpeed(700);
+//  stepperLeft.setMaxSpeed(1000);
+//  turn(15/1.66/2/PI*800);
+//  delay(2000);
+//  stepperRight.setMaxSpeed(1000);
+//  stepperLeft.setMaxSpeed(600);
+//  turn(15/1.66/2/PI*800);
+//  delay(2000);
+//
+//  stepperRight.setMaxSpeed(600);
+//  stepperLeft.setMaxSpeed(600);
+//  pivot(true,0.25*2*3.76/1.66*800);
+//  delay(2000);
+//  pivot(false,0.25*2*3.76/1.66*800);
+//  delay(2000);
+//  
+//  spin(0.25*3.76/1.66*800);
+//  delay(2000);
+//  spin(-0.25*3.76/1.66*800);
+//  delay(2000);
+//
+//  
+//
+//  digitalWrite(redLED, HIGH);
+//  digitalWrite(grnLED, LOW);
+//  digitalWrite(ylwLED, LOW);
+//  moveCircle(36,true);
+//  delay(5000);
+//  digitalWrite(redLED, LOW);
+//  digitalWrite(grnLED, LOW);
+//  digitalWrite(ylwLED, LOW);
+//  
+//  
+//  digitalWrite(redLED, HIGH);
+//  digitalWrite(grnLED, LOW);
+//  digitalWrite(ylwLED, HIGH);
+//  moveFigure8(36);
+//  delay(5000);
+//  digitalWrite(redLED, LOW);
+//  digitalWrite(grnLED, LOW);
+//  digitalWrite(ylwLED, LOW);
   
-  //forward(11.5*800);
-  //spin(5*3.76/1.66*800);
-  moveSquare(24);
+  
+  digitalWrite(redLED, LOW);
+  digitalWrite(grnLED, HIGH);
+  digitalWrite(ylwLED, LOW);
+  goToAngle(-60/180*PI);
   delay(5000);
+  goToAngle(135/180*PI);
+  delay(5000);
+  digitalWrite(redLED, LOW);
+  digitalWrite(grnLED, LOW);
+  digitalWrite(ylwLED, LOW);
+  
+  
+  digitalWrite(redLED, LOW);
+  digitalWrite(grnLED, HIGH);
+  digitalWrite(ylwLED, HIGH);
+  goToGoal(12,6);
+  delay(5000);
+  goToGoal(0,48);
+  delay(5000);
+  goToGoal(-24,36);
+  delay(5000);
+  digitalWrite(redLED, LOW);
+  digitalWrite(grnLED, LOW);
+  digitalWrite(ylwLED, LOW);
+  
+  
+  digitalWrite(redLED, HIGH);
+  digitalWrite(grnLED, HIGH);
+  digitalWrite(ylwLED, HIGH);
+  moveSquare(48);
+  delay(5000);
+  digitalWrite(redLED, LOW);
+  digitalWrite(grnLED, LOW);
+  digitalWrite(ylwLED, LOW);
   
 //  moveCircle(24,true);
 //  delay(1000);
@@ -191,10 +270,6 @@ void runAtSpeed ( void ) {
   distance - ticks
 */
 void pivot(bool direction, int distance) {
-
-  digitalWrite(redLED, LOW);//turn off red LED
-  digitalWrite(grnLED, HIGH);//turn on green LED
-  digitalWrite(ylwLED, HIGH);//turn on yellow LED
   
   if (direction){ 
       stepperLeft.move(0);
@@ -206,10 +281,6 @@ void pivot(bool direction, int distance) {
     }
   runAtSpeedToPosition();
   runToStop();
-  
-  digitalWrite(redLED, LOW);//turn off red LED
-  digitalWrite(grnLED, LOW);//turn off green LED
-  digitalWrite(ylwLED, LOW);//turn off yellow LED
 }
 
 /*
@@ -218,28 +289,16 @@ void pivot(bool direction, int distance) {
 */
 void spin(int distance) {
   
-  digitalWrite(redLED, LOW);//turn off red LED
-  digitalWrite(grnLED, HIGH);//turn on green LED
-  digitalWrite(ylwLED, LOW);//turn off yellow LED
-  
   stepperLeft.move(-distance);
   stepperRight.move(distance);
   runAtSpeedToPosition();
   runToStop();
-  
-  digitalWrite(redLED, LOW);//turn off red LED
-  digitalWrite(grnLED, LOW);//turn off green LED
-  digitalWrite(ylwLED, LOW);//turn off yellow LED
 }
 
 /*
   INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
 */
 void turn(int distance) {
-  
-  digitalWrite(redLED, LOW);//turn off red LED
-  digitalWrite(grnLED, LOW);//turn on green LED
-  digitalWrite(ylwLED, HIGH);//turn off yellow LED
 
   float lSpeed = abs(stepperLeft.maxSpeed());  
   float rSpeed = abs(stepperRight.maxSpeed());  
@@ -251,27 +310,18 @@ void turn(int distance) {
   runAtSpeedToPosition();
   runToStop();
   
-  digitalWrite(redLED, LOW);//turn off red LED
-  digitalWrite(grnLED, LOW);//turn off green LED
-  digitalWrite(ylwLED, LOW);//turn off yellow LED
 }
 /*
   INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
 */
 void forward(int distance) {
   
-  digitalWrite(redLED, HIGH);//turn on red LED
-  digitalWrite(grnLED, LOW);//turn off green LED
-  digitalWrite(ylwLED, LOW);//turn off yellow LED
   
   stepperLeft.move(distance);
   stepperRight.move(distance);
   runAtSpeedToPosition();
   runToStop();
   
-  digitalWrite(redLED, LOW);//turn off red LED
-  digitalWrite(grnLED, LOW);//turn off green LED
-  digitalWrite(ylwLED, LOW);//turn off yellow LED
   
 }
 /*
@@ -294,6 +344,7 @@ void stop() {
   INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
 */
 void goToAngle(float angle) {
+  
   float dist=angle/2/PI*800*3.76/1.66;
   stepperLeft.setMaxSpeed(300);
   stepperRight.setMaxSpeed(300);
@@ -312,6 +363,7 @@ void goToGoal(float x, float y) {
   stepperLeft.setMaxSpeed(1000);
   stepperRight.setMaxSpeed(1000);
   forward(dist);
+  
 }
 
 
@@ -319,6 +371,8 @@ void goToGoal(float x, float y) {
   INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
 */
 void moveCircle(int diam, bool dir) {
+  
+  
   float radius = diam/2;
   float speedOuter = 500*(3.76+radius)/radius;
   float speedInner = 500*(-3.76+radius)/radius;
@@ -332,6 +386,7 @@ void moveCircle(int diam, bool dir) {
     stepperRight.setMaxSpeed(speedInner);
   }
   turn(dist);
+  
 }
 
 /*
@@ -339,6 +394,8 @@ void moveCircle(int diam, bool dir) {
   twice with 2 different direcitons to create a figure 8 with circles of the given diameter.
 */
 void moveFigure8(int diam) {
+  
+  
   moveCircle(diam,true);
   moveCircle(diam,false);
 }
@@ -348,8 +405,10 @@ void moveFigure8(int diam) {
   twice with 2 different direcitons to create a figure 8 with circles of the given diameter.
 */
 void moveSquare(int side) {
+  
+  goToGoal(side,0);
   goToGoal(0,side);
   goToGoal(0,side);
   goToGoal(0,side);
-  goToGoal(0,side);
+  
 }
