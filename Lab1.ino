@@ -72,7 +72,7 @@ MultiStepper steppers;//create instance to control multiple steppers at the same
 #define stepperEnTrue false //variable for enabling stepper motor
 #define stepperEnFalse true //variable for disabling stepper motor
 
-#define pauseTime 10000 //time before robot moves
+#define pauseTime 3000 //time before robot moves
 
 void setup()
 {
@@ -162,13 +162,15 @@ void loop()
 //  digitalWrite(grnLED, LOW);
 //  digitalWrite(ylwLED, LOW);
   
+  stepperRight.setMaxSpeed(600);
+  stepperLeft.setMaxSpeed(600);
   
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, HIGH);
   digitalWrite(ylwLED, LOW);
-  goToAngle(-60/180*PI);
+  goToAngle(-PI/3);
   delay(5000);
-  goToAngle(135/180*PI);
+  goToAngle(3*PI/4);
   delay(5000);
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, LOW);
@@ -178,8 +180,6 @@ void loop()
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, HIGH);
   digitalWrite(ylwLED, HIGH);
-  goToGoal(12,6);
-  delay(5000);
   goToGoal(0,48);
   delay(5000);
   goToGoal(-24,36);
