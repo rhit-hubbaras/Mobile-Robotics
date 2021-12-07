@@ -8,16 +8,15 @@
    Variables and functions have logical, intuitive names
    Functions are used to improve modularity, clarity, and readability
 ***********************************
-  RobotIntro.ino
-  Carlotta Berry 11.21.16
+  Lab1.ino
+  Andrew Hubbard, Nithin Saravanapandian; 12/5/21
 
-  This program will introduce using the stepper motor library to create motion algorithms for the robot.
+  This program introduces using the stepper motor library to create motion algorithms for the robot.
   The motions will be go to angle, go to goal, move in a circle, square, figure eight and teleoperation (stop, forward, spin, reverse, turn)
-  It will also include wireless commmunication for remote control of the robot by using a game controller or serial monitor.
   The primary functions created are
   moveCircle - given the diameter in inches and direction of clockwise or counterclockwise, move the robot in a circle with that diameter
   moveFigure8 - given the diameter in inches, use the moveCircle() function with direction input to create a Figure 8
-  forward, reverse - both wheels move with same velocity, same direction
+  forward - both wheels move with same velocity, same direction
   pivot- one wheel stationary, one wheel moves forward or back
   spin - both wheels move with same velocity opposite direction
   turn - both wheels move with same direction different velocity
@@ -39,9 +38,9 @@
   digital pin 52 - left stepper motor step pin
   digital pin 53 - left stepper motor direction pin
 
-  digital pin 14 - red LED in series with 220 ohm resistor
-  digital pin 15 - green LED in series with 220 ohm resistor
-  digital pin 16 - yellow LED in series with 220 ohm resistor
+  digital pin 5 - red LED in series with 220 ohm resistor
+  digital pin 6 - green LED in series with 220 ohm resistor
+  digital pin 7 - yellow LED in series with 220 ohm resistor
 
 
   INSTALL THE LIBRARY
@@ -97,9 +96,9 @@ void setup()
 
 
   stepperRight.setMaxSpeed(1000);//set the maximum permitted speed limited by processor and clock speed, no greater than 4000 steps/sec on Arduino
-  stepperRight.setAcceleration(10000);//set desired acceleration in steps/s^2
+  stepperRight.setAcceleration(500);//set desired acceleration in steps/s^2
   stepperLeft.setMaxSpeed(1000);//set the maximum permitted speed limited by processor and clock speed, no greater than 4000 steps/sec on Arduino
-  stepperLeft.setAcceleration(10000);//set desired acceleration in steps/s^2
+  stepperLeft.setAcceleration(500);//set desired acceleration in steps/s^2
   steppers.addStepper(stepperRight);//add right motor to MultiStepper
   steppers.addStepper(stepperLeft);//add left motor to MultiStepper
   digitalWrite(stepperEnable, stepperEnTrue);//turns on the stepper motor driver
@@ -107,88 +106,93 @@ void setup()
   delay(pauseTime); //always wait 2.5 seconds before the robot moves
   //Serial.begin(9600); //start serial communication at 9600 baud rate for debugging
 
-  
+
 }
-//wheel radius = 1.66 in
-//wheelbase radius = 3.76 in
-void loop()
+const float wlRadius = 1.66 //wheel radius in inches
+                       const float wbRadius = 3.76 //wheelbase radius in inches
+                           void loop()
 {
+  //Forward/reverse demo
   stepperRight.setMaxSpeed(1000);
   stepperLeft.setMaxSpeed(1000);
-//  forward(12/1.66/2/PI*800);
-//  delay(2000);
-//  forward(-12/1.66/2/PI*800);
-//  delay(2000);
-//
-//  stepperRight.setMaxSpeed(700);
-//  stepperLeft.setMaxSpeed(1000);
-//  turn(15/1.66/2/PI*800);
-//  delay(2000);
-//  stepperRight.setMaxSpeed(1000);
-//  stepperLeft.setMaxSpeed(600);
-//  turn(15/1.66/2/PI*800);
-//  delay(2000);
-//
-//  stepperRight.setMaxSpeed(600);
-//  stepperLeft.setMaxSpeed(600);
-//  pivot(true,0.25*2*3.76/1.66*800);
-//  delay(2000);
-//  pivot(false,0.25*2*3.76/1.66*800);
-//  delay(2000);
-//  
-//  spin(0.25*3.76/1.66*800);
-//  delay(2000);
-//  spin(-0.25*3.76/1.66*800);
-//  delay(2000);
-//
-//  
-//
-//  digitalWrite(redLED, HIGH);
-//  digitalWrite(grnLED, LOW);
-//  digitalWrite(ylwLED, LOW);
-//  moveCircle(36,true);
-//  delay(5000);
-//  digitalWrite(redLED, LOW);
-//  digitalWrite(grnLED, LOW);
-//  digitalWrite(ylwLED, LOW);
-//  
-//  
-//  digitalWrite(redLED, HIGH);
-//  digitalWrite(grnLED, LOW);
-//  digitalWrite(ylwLED, HIGH);
-//  moveFigure8(36);
-//  delay(5000);
-//  digitalWrite(redLED, LOW);
-//  digitalWrite(grnLED, LOW);
-//  digitalWrite(ylwLED, LOW);
-  
+  forward(12 / wlRadius / 2 / PI * 800);
+  delay(2000);
+  forward(-12 / wlRadius / 2 / PI * 800);
+  delay(2000);
+
+  //turn demo
+  stepperRight.setMaxSpeed(700);
+  stepperLeft.setMaxSpeed(1000);
+  turn(15 / wlRadius / 2 / PI * 800);
+  delay(2000);
+  stepperRight.setMaxSpeed(1000);
+  stepperLeft.setMaxSpeed(600);
+  turn(15 / wlRadius / 2 / PI * 800);
+  delay(2000);
+
+  //pivot demo
   stepperRight.setMaxSpeed(600);
   stepperLeft.setMaxSpeed(600);
-  
-  digitalWrite(redLED, LOW);
-  digitalWrite(grnLED, HIGH);
+  pivot(true, 0.25 * 2 * wbRadius / wlRadius * 800);
+  delay(2000);
+  pivot(false, 0.25 * 2 * wbRadius / wlRadius * 800);
+  delay(2000);
+
+  //spin demo
+  spin(0.25 * wbRadius / wlRadius * 800);
+  delay(2000);
+  spin(-0.25 * wbRadius / wlRadius * 800);
+  delay(2000);
+
+
+
+  //circle demo
+  digitalWrite(redLED, HIGH);
+  digitalWrite(grnLED, LOW);
   digitalWrite(ylwLED, LOW);
-  goToAngle(-PI/3);
-  delay(5000);
-  goToAngle(3*PI/4);
+  moveCircle(36, true);
   delay(5000);
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, LOW);
   digitalWrite(ylwLED, LOW);
-  
-  
+
+  //figure eight demo
+  digitalWrite(redLED, HIGH);
+  digitalWrite(grnLED, LOW);
+  digitalWrite(ylwLED, HIGH);
+  moveFigure8(36);
+  delay(5000);
+  digitalWrite(redLED, LOW);
+  digitalWrite(grnLED, LOW);
+  digitalWrite(ylwLED, LOW);
+
+  //go to angle demo
+  stepperRight.setMaxSpeed(600);
+  stepperLeft.setMaxSpeed(600);
+  digitalWrite(redLED, LOW);
+  digitalWrite(grnLED, HIGH);
+  digitalWrite(ylwLED, LOW);
+  goToAngle(-PI / 3);
+  delay(5000);
+  goToAngle(3 * PI / 4);
+  delay(5000);
+  digitalWrite(redLED, LOW);
+  digitalWrite(grnLED, LOW);
+  digitalWrite(ylwLED, LOW);
+
+  //go to goal demo
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, HIGH);
   digitalWrite(ylwLED, HIGH);
-  goToGoal(0,48);
+  goToGoal(0, 48);
   delay(5000);
-  goToGoal(-24,36);
+  goToGoal(-24, 36);
   delay(5000);
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, LOW);
   digitalWrite(ylwLED, LOW);
-  
-  
+
+  //square demo
   digitalWrite(redLED, HIGH);
   digitalWrite(grnLED, HIGH);
   digitalWrite(ylwLED, HIGH);
@@ -197,35 +201,7 @@ void loop()
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, LOW);
   digitalWrite(ylwLED, LOW);
-  
-//  moveCircle(24,true);
-//  delay(1000);
-//  moveCircle(12,false);
-//  delay(5000);
-  
-//  goToGoal(12,12);
-//  goToAngle(-PI/4);
-//  delay(2000);
-//  goToGoal(-24,12);
-//  delay(5000);
-  
-//  goToAngle(PI);
-//  delay(1000);
-//  goToAngle(-PI/2);
-//  delay(1000);
-//  goToAngle(3*PI/2);
-//  delay(5000);
-  
-//  stepperLeft.setMaxSpeed(100);
-//  stepperRight.setMaxSpeed(200);
-//  turn(600);
-//  delay(1000);
-//  turn(-600);
-//  delay(1000);
-//  stepperLeft.setMaxSpeed(100);
-//  stepperRight.setMaxSpeed(50);
-//  turn(600);
-//  delay(1000);
+
 
 }
 
@@ -270,15 +246,15 @@ void runAtSpeed ( void ) {
   distance - ticks
 */
 void pivot(bool direction, int distance) {
-  
-  if (direction){ 
-      stepperLeft.move(0);
-      stepperRight.move(distance);
-    }
+
+  if (direction) { //choose which wheel to move
+    stepperLeft.move(0);
+    stepperRight.move(distance);
+  }
   else {
-      stepperLeft.move(distance);
-      stepperRight.move(0);
-    }
+    stepperLeft.move(distance);
+    stepperRight.move(0);
+  }
   runAtSpeedToPosition();
   runToStop();
 }
@@ -288,7 +264,7 @@ void pivot(bool direction, int distance) {
   distance - ticks; positive:CCW, negative:CW
 */
 void spin(int distance) {
-  
+
   stepperLeft.move(-distance);
   stepperRight.move(distance);
   runAtSpeedToPosition();
@@ -296,41 +272,45 @@ void spin(int distance) {
 }
 
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  Move in a circular arc. Speeds must be set beforehand
+  distance - distance to move in ticks, as measured for the wheelbase center
 */
 void turn(int distance) {
 
-  float lSpeed = abs(stepperLeft.maxSpeed());  
-  float rSpeed = abs(stepperRight.maxSpeed());  
-  float lDistance = 2*distance*lSpeed/(lSpeed+rSpeed);
-  float rDistance = 2*distance*rSpeed/(lSpeed+rSpeed);
+  float lSpeed = abs(stepperLeft.maxSpeed());
+  float rSpeed = abs(stepperRight.maxSpeed());
+  float lDistance = 2 * distance * lSpeed / (lSpeed + rSpeed);
+  float rDistance = 2 * distance * rSpeed / (lSpeed + rSpeed);
 
   stepperLeft.move(lDistance);
   stepperRight.move(rDistance);
   runAtSpeedToPosition();
   runToStop();
-  
+
 }
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  Move in a straight line.
+  distance - distance to move in ticks; negative values move backwards
 */
 void forward(int distance) {
-  
-  
+
+
   stepperLeft.move(distance);
   stepperRight.move(distance);
   runAtSpeedToPosition();
   runToStop();
-  
-  
+
+
 }
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  Move backwards. For compatibility; use forward() with a negative argument.
 */
 void reverse(int distance) {
+  forward(-distance);
 }
+
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  Stop both wheels
 */
 void stop() {
   stepperLeft.stop();
@@ -341,52 +321,57 @@ void stop() {
 
 
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  Rotate to a given angle
+  angle - angle to rotate in radians. Positive : CCW, negative : CW
 */
 void goToAngle(float angle) {
-  
-  float dist=angle/2/PI*800*3.76/1.66;
+
+  float dist = angle / 2 / PI * 800 * wbRadius / wlRadius;
   stepperLeft.setMaxSpeed(300);
   stepperRight.setMaxSpeed(300);
   spin(dist);
 }
 
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  Move in a straight line to a given target. Coordinate system is oriented with x-axis forward and y-axis to the left.
+  x - x-coordinate of target, in inches
+  y - y-coordinate of target, in inches
 */
 void goToGoal(float x, float y) {
-  
-  float distIn=sqrt(x*x+y*y);
-  float dist=distIn/2/PI/1.66*800;
-  float angle=atan2(y,x);
+
+  float distIn = sqrt(x * x + y * y);
+  float dist = distIn / 2 / PI / wlRadius * 800;
+  float angle = atan2(y, x);
   goToAngle(angle);
   stepperLeft.setMaxSpeed(1000);
   stepperRight.setMaxSpeed(1000);
   forward(dist);
-  
+
 }
 
 
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  Drive in a circle
+  diam - diameter of circle, in inches, as measured to the wheelbase center
+  dir - direction of circle. true : CCW, false : CW
 */
 void moveCircle(int diam, bool dir) {
-  
-  
-  float radius = diam/2;
-  float speedOuter = 500*(3.76+radius)/radius;
-  float speedInner = 500*(-3.76+radius)/radius;
-  float distIn = 2*PI*radius;
-  float dist = distIn/2/PI/1.66*800;
-  if(dir){
+
+
+  float radius = diam / 2;
+  float speedOuter = 500 * (wbRadius + radius) / radius;
+  float speedInner = 500 * (-wbRadius + radius) / radius;
+  float distIn = 2 * PI * radius;
+  float dist = distIn / 2 / PI / wlRadius * 800;
+  if (dir) { //choose speeds based on direction
     stepperLeft.setMaxSpeed(speedInner);
     stepperRight.setMaxSpeed(speedOuter);
-  } else{
+  } else {
     stepperLeft.setMaxSpeed(speedOuter);
     stepperRight.setMaxSpeed(speedInner);
   }
   turn(dist);
-  
+
 }
 
 /*
@@ -394,21 +379,21 @@ void moveCircle(int diam, bool dir) {
   twice with 2 different direcitons to create a figure 8 with circles of the given diameter.
 */
 void moveFigure8(int diam) {
-  
-  
-  moveCircle(diam,true);
-  moveCircle(diam,false);
+
+
+  moveCircle(diam, true);
+  moveCircle(diam, false);
 }
 
 /*
-  The moveFigure8() function takes the diameter in inches as the input. It uses the moveCircle() function
-  twice with 2 different direcitons to create a figure 8 with circles of the given diameter.
+  Drive in a square.
+  side - length in inches of side
 */
 void moveSquare(int side) {
-  
-  goToGoal(side,0);
-  goToGoal(0,side);
-  goToGoal(0,side);
-  goToGoal(0,side);
-  
+
+  goToGoal(side, 0);
+  goToGoal(0, side);
+  goToGoal(0, side);
+  goToGoal(0, side);
+
 }
