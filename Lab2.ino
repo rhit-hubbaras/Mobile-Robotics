@@ -9,18 +9,15 @@
    Functions are used to improve modularity, clarity, and readability
 ***********************************
   Lab2.ino
-  Andrew Hubbard, Nithin Saravanapandian; 12/5/21
+  Andrew Hubbard, Nithin Saravanapandian; 1/5/22
 
-  This program introduces using the stepper motor library to create motion algorithms for the robot.
-  The motions will be go to angle, go to goal, move in a circle, square, figure eight and teleoperation (stop, forward, spin, reverse, turn)
-  The primary functions created are
-  moveCircle - given the diameter in inches and direction of clockwise or counterclockwise, move the robot in a circle with that diameter
-  moveFigure8 - given the diameter in inches, use the moveCircle() function with direction input to create a Figure 8
-  forward - both wheels move with same velocity, same direction
-  pivot- one wheel stationary, one wheel moves forward or back
-  spin - both wheels move with same velocity opposite direction
-  turn - both wheels move with same direction different velocity
-  stop -both wheels stationary
+  This program introduces basic obstacle avoidance behaviors
+  New behaviors are as follows:
+  agressiveKid - move forward and stop at an obstacle
+  shyKid - move away from any obstacles
+  randomWander - repeatedly move a random distance and change direction
+  localize - track changes in robot position/direction
+  goToGoalNew - go to target position inglobal coordinates. Can be interrupted by obstacle avoidance.
 
   Interrupts
   https://www.arduino.cc/reference/en/language/functions/external-interrupts/attachinterrupt/
@@ -51,7 +48,7 @@
 
 #include <AccelStepper.h>//include the stepper motor library
 #include <MultiStepper.h>//include multiple stepper motor library
-#include <PIDcontroller.h>
+//#include <PIDcontroller.h>
 
 //define pin numbers
 const int rtStepPin = 50; //right stepper motor step pin (pin 44 for wireless)
@@ -70,9 +67,6 @@ AccelStepper stepperRight(AccelStepper::DRIVER, rtStepPin, rtDirPin);//create in
 AccelStepper stepperLeft(AccelStepper::DRIVER, ltStepPin, ltDirPin);//create instance of left stepper motor object (2 driver pins, step pin 50, direction input pin 51)
 MultiStepper steppers;//create instance to control multiple steppers at the same time
 
-float RobotPos[3];
-long stepperPos[2];
-//RobotPos = [0,0,0];
 
 #define stepperEnable 48    //stepper enable pin on stepStick 
 #define enableLED 13        //stepper enabled LED
@@ -106,9 +100,9 @@ void setup()
   digitalWrite(grnLED, LOW);//turn off green LED
 
 
-  stepperRight.setMaxSpeed(1000);//set the maximum permitted speed limited by processor and clock speed, no greater than 4000 steps/sec on Arduino
+  stepperRight.setMaxSpeed(600);//set the maximum permitted speed limited by processor and clock speed, no greater than 4000 steps/sec on Arduino
   stepperRight.setAcceleration(10000);//set desired acceleration in steps/s^2
-  stepperLeft.setMaxSpeed(1000);//set the maximum permitted speed limited by processor and clock speed, no greater than 4000 steps/sec on Arduino
+  stepperLeft.setMaxSpeed(600);//set the maximum permitted speed limited by processor and clock speed, no greater than 4000 steps/sec on Arduino
   stepperLeft.setAcceleration(10000);//set desired acceleration in steps/s^2
   steppers.addStepper(stepperRight);//add right motor to MultiStepper
   steppers.addStepper(stepperLeft);//add left motor to MultiStepper
@@ -117,7 +111,12 @@ void setup()
   delay(pauseTime); //always wait 2.5 seconds before the robot moves
   Serial.begin(9600); //start serial communication at 9600 baud rate for debugging
   randomSeed(analogRead(0));
-  
+
+  //Initialize position tracking variables
+  float RobotPos[3];
+  long stepperPos[2];
+  int backupCounter = 0;
+
   RobotPos[0]=0;
   RobotPos[1]=0;
   RobotPos[2]=0;
@@ -125,49 +124,34 @@ void setup()
   stepperPos[1]=0;
   
   localize();
-  goToAngle(-PI/2);
-  localize();
-  Serial.println(RobotPos[0]);
-  Serial.println(RobotPos[1]);
-  Serial.println(RobotPos[2]);
-  
 }
 
 /*
  * MAIN LOOP CALL
  */
 void loop(){
-//  int rpos = stepperRight.currentPosition();
-//  int lpos = stepperLeft.currentPosition();
-//  
-//  float sensorArray[6];
-//  sensorArray[0] = readFrontIR();
-//  sensorArray[1] = readBackIR();
-//  sensorArray[2] = readLeftIR();
-//  sensorArray[3] = readRightIR();
-//  sensorArray[4] = readLeftSonar();
-//  sensorArray[5] = readRightSonar();
-////  Serial.print(sensorArray[0]);Serial.print("  ");
-////  Serial.print(sensorArray[1]);Serial.print("  ");
-////  Serial.print(sensorArray[2]);Serial.print("  ");
-////  Serial.print(sensorArray[3]);Serial.print("  ");
-////  Serial.print(sensorArray[4]);Serial.print("  ");
-////  Serial.print(sensorArray[5]);Serial.print("  ");
-////  Serial.println(" ");
-//
-//  if(sensorArray[0]<5){
-//    agressiveKid(sensorArray[0]);
-//  }else if(sensorArray[0] <12 || sensorArray[1] <12 || sensorArray[2] <12 || sensorArray[3] <12 || sensorArray[4] <12 || sensorArray[5] <12){
-////    shyKid2(sensorArray);
-//    shyKid(sensorArray);
-//  }else{
-//    //randomWander();
-//    goToGoalNew(36,36);
-//  }
-//
-//
-////  shyKid2(sensorArray);
-////  shyKid(sensorArray);
+  localize();
+  
+  float sensorArray[6];
+  sensorArray = readSensors();
+
+  int shyKidTrigger = 7;
+
+  if(sensorArray[0]<3){ //if too close in front, run away (agressive)
+    agressiveKid(sensorArray[0]);
+    
+  }else if(sensorArray[0] <shyKidTrigger || sensorArray[1] <shyKidTrigger ||
+  sensorArray[2] <shyKidTrigger || sensorArray[3] <shyKidTrigger || 
+  sensorArray[4] <shyKidTrigger*0 || sensorArray[5] <shyKidTrigger*0){ // if close to obstacle, move away (shy)
+    
+    shyKid2(sensorArray);
+    //shyKid(sensorArray);
+
+  }else{ //otherwise random wander or go to goal (if goal set)
+    //randomWander();
+    goToGoalNew(0,-48);
+  }
+
 }
 
 
@@ -178,13 +162,17 @@ const float wlRadius = 1.66; //wheel radius in inches
 const float wbRadius = 3.76; //wheelbase radius in inches
 
 
+/*
+ * go to goal functionality, utilizes local-global coordinate transform to allow for interruption.
+ * 
+ */
 void goToGoalNew(float x, float y){
   localize();
   float dtheta = atan2(y-RobotPos[1],x-RobotPos[0])-RobotPos[2];
   
-  if(abs(dtheta)>PI/12){
+  if(abs(dtheta)>PI/12){ //look toward goal
     goToAngle(dtheta);
-  } else {
+  } else { //move forward
     float distToGo = sqrt(pow(y-RobotPos[1],2)+pow(x-RobotPos[0],2))/(wlRadius*2*PI)*800;
     if(distToGo>50){
     
@@ -206,22 +194,21 @@ void goToGoalNew(float x, float y){
   
 }
 
+/*
+ * Update global coordinates based on stepper moter data
+ */
 void localize(){
   long lPos = stepperLeft.currentPosition();
   long rPos = stepperRight.currentPosition();
   long dl = lPos - stepperPos[0];
   long dr = rPos - stepperPos[1];
-  Serial.println(lPos);
-  Serial.println(rPos);
 
-  float dtheta = (dr-dl)/2.0/800*wlRadius/wbRadius;
+  float dtheta = (dr-dl)/2.0/800*wlRadius*2*PI/wbRadius;
   float ddist = (dr+dl)/2.0/800*wlRadius*2*PI;
-  Serial.println(dtheta*1000);
 
   RobotPos[0] = RobotPos[0]+ddist*cos(RobotPos[2]+dtheta/2);
   RobotPos[1] = RobotPos[1]+ddist*sin(RobotPos[2]+dtheta/2);
   RobotPos[2] = RobotPos[2]+dtheta;
-
   
   stepperPos[0] = stepperLeft.currentPosition();
   stepperPos[1] = stepperRight.currentPosition();
@@ -245,7 +232,7 @@ void randomWander(){
   digitalWrite(grnLED, HIGH);
   digitalWrite(ylwLED, LOW);
   
-  if(stepperRight.distanceToGo() <= 0 && stepperLeft.distanceToGo() <= 0){
+  if(stepperRight.distanceToGo() <= 0 && stepperLeft.distanceToGo() <= 0){ //if at target distance, turn at rendom angle and choose random distance
     stepperRight.stop();
     stepperLeft.stop();
     float x = random(0,1000000)/1000000.0;
@@ -264,7 +251,7 @@ void randomWander(){
     stepperRight.move(dist/(wlRadius*2*PI)*800);
     stepperLeft.move(dist/(wlRadius*2*PI)*800);
     
-  }else{
+  }else{ //keep moving until target distance
     
     stepperRight.setMaxSpeed(700);
     stepperLeft.setMaxSpeed(700);
@@ -283,13 +270,15 @@ void randomWander(){
 }
 
 /*
- * 
+ * agressive kid
+ * backs up from walls directly ahead, 
+ * moves forward otherwise
  */
  void agressiveKid(float frIRdist){
   digitalWrite(redLED, HIGH);
   digitalWrite(grnLED, LOW);
   digitalWrite(ylwLED, LOW);
-  if(frIRdist < 4){
+  if(frIRdist < 3){ //if too close, stop
     
     stepperRight.stop();
     stepperLeft.stop();
@@ -300,7 +289,7 @@ void randomWander(){
     delay(200);
     
     
-  }else{
+  }else{ //otherwise move forward
     
     stepperRight.setMaxSpeed(700);
     stepperLeft.setMaxSpeed(700);
@@ -320,6 +309,8 @@ void randomWander(){
 /*
  * shy kid
  * 
+ * moves forward, and away from obstacles
+ * first attempt at potential fields navigation
  */
 void shyKid(float sensorArray[]){
   digitalWrite(redLED, LOW);
@@ -342,23 +333,12 @@ void shyKid(float sensorArray[]){
   float ry = min(max(abs(fy)-1,0),10);
   if(fy<0){ry = -ry;}
 
-  //rx=2;ry=0;
-
   float lspeed = rx*60-ry*50;
   int ldir = 1;
   if(lspeed<0){lspeed = -lspeed;ldir = -1;}
   float rspeed = rx*60+ry*50;
   int rdir = 1;
   if(rspeed<0){rspeed = -rspeed;rdir = -1;}
-
-//  if(rx<0){
-//    float tempspeed = lspeed;
-//    lspeed = rspeed;
-//    rspeed = tempspeed;
-//    int tempdir = ldir;
-//    ldir = rdir;
-//    rdir = tempdir;
-//  }
   
   stepperLeft.move(800*ldir);
   stepperRight.move(800*rdir);
@@ -383,7 +363,11 @@ void shyKid(float sensorArray[]){
   }
 }
 
-
+/*
+ * shy kid v2
+ * determines which IR sensors are "triggered"
+ * impliments a logical retreat based on triggered sensors
+ */
 void shyKid2(float sensorArray[]) {
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, LOW);
@@ -404,33 +388,34 @@ void shyKid2(float sensorArray[]) {
   triggers[2]=(sensorArray[2] < 7);
   triggers[3]=(sensorArray[3] < 7);
 
-  if(triggers[0]==triggers[1] && triggers[2]==triggers[3]&& triggers[1]==triggers[2]){
+  if(triggers[0]==triggers[1] && triggers[2]==triggers[3]&& triggers[1]==triggers[2]){ //if all sides are the same, do nothing
       stepperLeft.stop();
       stepperRight.stop();
   }
-  else if(triggers[0]>triggers[1] && triggers[2]==triggers[3]){
-      reverse(800);
-//      while(sensorArray[0] < 7){
-//          reverse(50);
-//          sensorArray[0] = readFrontIR();
-//        }
+  else if(triggers[0]>triggers[1] && triggers[2]==triggers[3]){ //if blocked in front move back
+      //reverse(800);
+      reverse(400);
+      if(backupCounter++>=1){ //if blocked multiple times, try to move around obstacle
+        goToAngle(PI/2);
+        forward(1600);
+        goToAngle(-PI/2);
+        forward(400);
+        backupCounter = 0;
+      }
+      //Serial.println(backupCounter);
     }
-  else if(triggers[0]==0 && triggers[2]==triggers[3]){
+  else if(triggers[0]==0 && triggers[2]==triggers[3]){ //if blocked sides or back and not front, escape forward
       forward(800);
-//      while(sensorArray[1] < 7){
-//          forward(50);
-//          sensorArray[1] = readBackIR();
-//        }
     }
-  else if(triggers[0]==triggers[1] && 0==triggers[3]){
+  else if(triggers[0]==triggers[1] && 0==triggers[3]){ //if blocked on front/back or left but not right, escape right
       goToAngle(PI/2);
       reverse(800);
     }
-  else if(triggers[0]==triggers[1] && triggers[2]<triggers[3]){
+  else if(triggers[0]==triggers[1] && triggers[2]<triggers[3]){ //if blocked on right but not left, escape left
       goToAngle(-PI/2);
       reverse(800);
     }
-  else if(triggers[0]&&triggers[2]){
+  else if(triggers[0]&&triggers[2]){ //if blocked by corner, move diagonally
     goToAngle(PI/4);
     reverse(800);
   }
@@ -461,21 +446,43 @@ void shyKid2(float sensorArray[]) {
 //        }
 //    }
 }
- float VectorFrontAngle(float fIRdist, float lSonardist, float rSonardist){
+// float VectorFrontAngle(float fIRdist, float lSonardist, float rSonardist){
+//
+//   float fvectorx = fIRdist + lSonardist*sin(PI/4) + rSonardist*sin(PI/4);
+//   float fvectory = lSonardist*cos(PI/4) - rSonardist*cos(PI/4);
+//   float fvectorangle = atan(fvectorx/fvectory);
+//
+//  return fvectorangle;
+//}
+//
+//float VectorFrontMag(float fIRdist, float lSonardist, float rSonardist){
+//
+//   float fvectormag = sqrt(fIRdist*fIRdist + lSonardist*lSonardist + rSonardist*rSonardist);
+//   
+//  return fvectormag;
+//}
 
-   float fvectorx = fIRdist + lSonardist*sin(PI/4) + rSonardist*sin(PI/4);
-   float fvectory = lSonardist*cos(PI/4) - rSonardist*cos(PI/4);
-   float fvectorangle = atan(fvectorx/fvectory);
+/*
+ * Read all sensor values
+ */
+ float[] readSensors(){
+  float sensorArray[6];
+  sensorArray[0] = readFrontIR();
+  sensorArray[1] = readBackIR();
+  sensorArray[2] = readLeftIR();
+  sensorArray[3] = readRightIR();
+  sensorArray[4] = 25;//readLeftSonar();
+  sensorArray[5] = 25;//readRightSonar();
+//  Serial.print(sensorArray[0]);Serial.print("  ");
+//  Serial.print(sensorArray[1]);Serial.print("  ");
+//  Serial.print(sensorArray[2]);Serial.print("  ");
+//  Serial.print(sensorArray[3]);Serial.print("  ");
+//  Serial.print(sensorArray[4]);Serial.print("  ");
+//  Serial.print(sensorArray[5]);Serial.print("  ");
+//  Serial.println(" ");
 
-  return fvectorangle;
-}
-
-float VectorFrontMag(float fIRdist, float lSonardist, float rSonardist){
-
-   float fvectormag = sqrt(fIRdist*fIRdist + lSonardist*lSonardist + rSonardist*rSonardist);
-   
-  return fvectormag;
-}
+  return sensorArray;
+ }
 
 // Front IR  Calibration : dist (in) = 24.4*exp(-0.00948*reading) + 1.66
 // Back  IR  Calibration : dist (in) = 30.4*exp(-0.01009*reading) + 1.75
@@ -484,7 +491,13 @@ float VectorFrontMag(float fIRdist, float lSonardist, float rSonardist){
 // Left  SNR Calibration : dist (in) = 0.00694*reading - 1.292
 // Right SNR Calibration : dist (in) = 0.00714*reading - 1.158
 
-/*Functions to read sensor data in inches*/
+/*
+ * Functions to read sensor data in inches
+ */
+
+ /*
+  * Read front IR data in inches
+  */
 float readFrontIR() { 
   int avg=0;
   for (int i = 0; i <= 9 ; i++) {
@@ -495,6 +508,9 @@ float readFrontIR() {
   return dist*49/50;
 }
 
+ /*
+  * Read rear IR data in inches
+  */
 float readBackIR() { 
   int avg=0;
   for (int i = 0; i <= 9 ; i++) {
@@ -505,6 +521,9 @@ float readBackIR() {
   return dist*49/50;
 }
 
+ /*
+  * Read left IR data in inches
+  */
 float readLeftIR() { 
   int avg=0;
   for (int i = 0; i <= 9 ; i++) {
@@ -515,6 +534,9 @@ float readLeftIR() {
   return dist*49/50;
 }
 
+ /*
+  * Read right IR data in inches
+  */
 float readRightIR() { 
   int avg=0;
   for (int i = 0; i <= 9 ; i++) {
@@ -525,6 +547,9 @@ float readRightIR() {
   return dist*49/50;
 }
 
+ /*
+  * Read left sonar data in inches
+  */
 float readLeftSonar(){
   long value=0;
   int n=0;
@@ -546,6 +571,10 @@ float readLeftSonar(){
   return dist*49/50;
 }
 
+
+ /*
+  * Read right sonar data in inches
+  */
 float readRightSonar(){
   long value=0;
   int n=0;
