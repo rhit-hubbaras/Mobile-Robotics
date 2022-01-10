@@ -39,11 +39,6 @@
   digital pin 6 - green LED in series with 220 ohm resistor
   digital pin 7 - yellow LED in series with 220 ohm resistor
 
-
-  INSTALL THE LIBRARY
-  Sketch->Include Library->Manage Libraries...->AccelStepper->Include
-  OR
-  Sketch->Include Library->Add .ZIP Library...->AccelStepper-1.53.zip
 */
 
 #include <AccelStepper.h>//include the stepper motor library
@@ -79,10 +74,11 @@ MultiStepper steppers;//create instance to control multiple steppers at the same
 #define pauseTime 3000 //time before robot moves
 
 
-
+//Initialize position tracking variables
 float RobotPos[3];
 long stepperPos[2];
 int backupCounter = 0;
+float pastErr = 0;
 
 void setup()
 {
@@ -119,8 +115,7 @@ void setup()
   randomSeed(analogRead(0));
 
   //Initialize position tracking variables
-  
-  
+
   RobotPos[0]=0;
   RobotPos[1]=0;
   RobotPos[2]=0;
@@ -130,21 +125,223 @@ void setup()
   localize();
 }
 
+//State machine states
+volatile byte state = 0;
+#define randWand      0
+#define avoid         1
+#define followL       2
+#define followR       3
+#define followC       4
+#define turnLin       5
+#define turnRin       6
+#define turnLout      7
+#define turnRout      8
+#define turnB         9
+
 /*
  * MAIN LOOP CALL
  */
 void loop(){
   localize();
-  float sensorArray[6];
-
   
-  readSensors(sensorArray);
+  float sensors[6];
+  readSensors(sensors);
 
-  float ltIRdist = sensorArray[2];
+  int avoidDist = 0;
+  int wallDetectDist = 18;
 
-  BangBang(ltIRdist);
+  switch(state){
+    case randWand:
+    
+    digitalWrite(redLED, LOW);
+    digitalWrite(grnLED, HIGH);
+    digitalWrite(ylwLED, LOW);
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid;
+      }
+      else if(sensors[2] < wallDetectDist){
+        state = followL;
+      }
+      else if(sensors[3] < wallDetectDist){
+        state = followR;
+      }
+      else{
+        randomWander();
+      }
+      break;
+    
+    case avoid:
+    
+    digitalWrite(redLED, LOW);
+    digitalWrite(grnLED, LOW);
+    digitalWrite(ylwLED, LOW);
+      if(sensors[0] > avoidDist && sensors[1] > avoidDist && sensors[2] > avoidDist && sensors[3] > avoidDist){
+        state = randWand;
+      }
+      else{
+        shyKid2(sensors);
+      }
+      break;
+    
+    case followL:
+    
+    digitalWrite(redLED, LOW);
+    digitalWrite(grnLED, HIGH);
+    digitalWrite(ylwLED, HIGH);
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid;
+      }
+      else if(sensors[0] < 6){
+        state = turnRin;
+      }
+      else if(sensors[3] < wallDetectDist){
+        state = followC;
+      }
+      else if(sensors[2] > wallDetectDist){
+        state = turnLout;
+      }
+      else if(0){//too much follow
+        //turn away
+        state = randWand;
+      }
+      else{
+        float err = sensors[2]-5;
+        //bangBang(err);
+        PDcontrol(err);
+      }
+      break;
+    
+    case followR:
+    
+    digitalWrite(redLED, HIGH);
+    digitalWrite(grnLED, LOW);
+    digitalWrite(ylwLED, HIGH);
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid;
+      }
+      else if(sensors[0] < 6){
+        state = turnLin;
+      }
+      else if(sensors[2] < wallDetectDist){
+        state = followC;
+      }
+      else if(sensors[3] > wallDetectDist){
+        state = turnRout;
+      }
+      else if(0){//too much follow
+        //turn away
+        state = randWand;
+      }
+      else{
+        float err = 5-sensors[3];
+        //bangBang(err);
+        PDcontrol(err);
+      }
+      break;
+    
+    case followC:
+    
+    
+    digitalWrite(redLED, HIGH);
+    digitalWrite(grnLED, HIGH);
+    digitalWrite(ylwLED, HIGH);
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid;
+      }
+      else if(sensors[0] < 6){
+        state = turnB;
+      }
+      else if(sensors[2] > wallDetectDist){
+        state = followR;
+      }
+      else if(sensors[3] > wallDetectDist){
+        state = followL;
+      }
+      else{
+        float err = (sensors[2]-sensors[3])/2;
+        //bangBang(err);
+        PDcontrol(err);
+      }
+      break;
+    
+    case turnLin:
+    
+    digitalWrite(redLED, HIGH);
+    digitalWrite(grnLED, HIGH);
+    digitalWrite(ylwLED, LOW);
+      goToAngle(PI/2);
+      state = followL;
+      break;
+    
+    case turnRin:
+    digitalWrite(redLED, HIGH);
+    digitalWrite(grnLED, HIGH);
+    digitalWrite(ylwLED, LOW);
+      goToAngle(-PI/2);
+      state = followR;
+      break;
+    
+    case turnLout:
+    digitalWrite(redLED, LOW);
+    digitalWrite(grnLED, LOW);
+    digitalWrite(ylwLED, LOW);
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid;
+      }
+      else if(sensors[2] < wallDetectDist){
+        state = followL;
+      }
+      else if(0){//turned 90 degrees
+        //turn back
+        state = randWand;
+      }
+      else{
+        //wide turn
+      }
+      break;
+    
+    case turnRout:
+    digitalWrite(redLED, LOW);
+    digitalWrite(grnLED, LOW);
+    digitalWrite(ylwLED, LOW);
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid;
+      }
+      else if(sensors[3] < wallDetectDist){
+        state = followR;
+      }
+      else if(0){//turned 90 degrees
+        //turn back
+        state = randWand;
+      }
+      else{
+        //wide turn
+      }
+      break;
+    
+    case turnB:
+    digitalWrite(redLED, HIGH);
+    digitalWrite(grnLED, HIGH);
+    digitalWrite(ylwLED, LOW);
+      goToAngle(PI);
+      state = followC;
+      break;
+  }
 
-
+//  if(sensorArray[0]<3){ //if too close in front, run away (agressive)
+//    agressiveKid(sensorArray[0]);
+//    
+//  }else if(sensorArray[0] <shyKidTrigger || sensorArray[1] <shyKidTrigger ||
+//  sensorArray[2] <shyKidTrigger || sensorArray[3] <shyKidTrigger || 
+//  sensorArray[4] <shyKidTrigger*0 || sensorArray[5] <shyKidTrigger*0){ // if close to obstacle, move away (shy)
+//    
+//    shyKid2(sensorArray);
+//    //shyKid(sensorArray);
+//
+//  }else{ //otherwise random wander or go to goal (if goal set)
+//    //randomWander();
+//    goToGoalNew(0,-48);
+//  }
 
 }
 
@@ -155,6 +352,88 @@ void loop(){
 const float wlRadius = 1.66; //wheel radius in inches
 const float wbRadius = 3.76; //wheelbase radius in inches
 
+void PDcontrol(float err){
+  float kp = 7;
+  float kd = 0.5;
+  float adjust = kp * err + kd * (err - pastErr);
+  pastErr = err;
+
+  int centerSpeed = 400;
+  float lSpeed = centerSpeed - adjust;
+  float rSpeed = centerSpeed + adjust;
+  
+
+  stepperRight.setMaxSpeed(rSpeed);
+  stepperLeft.setMaxSpeed(lSpeed);
+
+  stepperRight.setSpeed(rSpeed);
+  stepperLeft.setSpeed(lSpeed);
+
+  stepperRight.move(10000);
+  stepperLeft.move(10000);
+    
+  
+  int steps=0;
+  while(steps<50){
+    
+    if(stepperRight.runSpeed()){steps++;}
+    if(stepperLeft.runSpeed()){steps++;}
+  }
+}
+
+void bangBang(float err){
+  
+   //Serial.println(ltIRdist);
+   
+   if(err < -1){ //if too close, turn away
+    
+    digitalWrite(redLED, LOW);
+    digitalWrite(grnLED, LOW);
+    digitalWrite(ylwLED, HIGH);
+    stepperRight.stop();
+    stepperLeft.stop();
+    //delay(500);
+    stepperRight.setMaxSpeed(300);
+    stepperLeft.setMaxSpeed(300);
+    pivot(false, inToSteps(1));
+    //delay(300);
+    forward(inToSteps(3.5));
+    pivot(true, inToSteps(0.5));
+    stepperRight.stop();
+    stepperLeft.stop();
+    //delay(500);
+    
+  }else if(err > 1) { //if too far, turn in
+    digitalWrite(redLED, HIGH);
+    digitalWrite(grnLED, LOW);
+    digitalWrite(ylwLED, LOW);
+    stepperRight.stop();
+    stepperLeft.stop();
+    //delay(500);
+    stepperRight.setMaxSpeed(300);
+    stepperLeft.setMaxSpeed(300);
+    pivot(true, inToSteps(1));
+    //delay(300);
+    forward(inToSteps(2.5));
+    pivot(false, inToSteps(0.5));
+    stepperRight.stop();
+    stepperLeft.stop();
+    //delay(500);
+    }
+  else{ //otherwise move forward
+    digitalWrite(redLED, LOW);
+    digitalWrite(grnLED, LOW);
+    digitalWrite(ylwLED, LOW);
+    
+    stepperRight.setMaxSpeed(700);
+    stepperLeft.setMaxSpeed(700);
+    stepperRight.setSpeed(700);
+    stepperLeft.setSpeed(700);
+      
+    forward(inToSteps(2.5));
+    
+  }
+}
 
 /*
  * go to goal functionality, utilizes local-global coordinate transform to allow for interruption.
@@ -220,49 +499,6 @@ void localize(){
   * random wander
   * randomly chooses a direction and distance
   */
-void BangBang(float ltIRdist){
-  
-   Serial.println(ltIRdist);
-   
-   if(ltIRdist < 3){ //if too close, turn away
-    
-    stepperRight.stop();
-    stepperLeft.stop();
-    delay(500);
-    stepperRight.setMaxSpeed(300);
-    stepperLeft.setMaxSpeed(300);
-    pivot(false, 5);
-    delay(300);
-    forward(2);
-    stepperRight.stop();
-    stepperLeft.stop();
-    delay(500);
-    
-  }else if(ltIRdist > 5) { //if too far, turn in
-    stepperRight.stop();
-    stepperLeft.stop();
-    delay(500);
-    stepperRight.setMaxSpeed(300);
-    stepperLeft.setMaxSpeed(300);
-    pivot(true, 5);
-    delay(300);
-    forward(2);
-    stepperRight.stop();
-    stepperLeft.stop();
-    delay(500);
-    }
-  else{ //otherwise move forward
-    
-    stepperRight.setMaxSpeed(700);
-    stepperLeft.setMaxSpeed(700);
-    stepperRight.setSpeed(700);
-    stepperLeft.setSpeed(700);
-      
-    forward(3);
-    
-  }
-}
- 
 void randomWander(){
 
   digitalWrite(redLED, LOW);
@@ -502,7 +738,7 @@ void shyKid2(float sensorArray[]) {
 /*
  * Read all sensor values
  */
-void readSensors(float (& sensorArray)[6]){
+ void readSensors(float (& sensorArray) [6]){
   //float sensorArray[6];
   sensorArray[0] = readFrontIR();
   sensorArray[1] = readBackIR();
@@ -518,8 +754,8 @@ void readSensors(float (& sensorArray)[6]){
 //  Serial.print(sensorArray[5]);Serial.print("  ");
 //  Serial.println(" ");
 
-// return sensorArray;
-}
+  //return sensorArray;
+ }
 
 // Front IR  Calibration : dist (in) = 24.4*exp(-0.00948*reading) + 1.66
 // Back  IR  Calibration : dist (in) = 30.4*exp(-0.01009*reading) + 1.75
@@ -641,13 +877,12 @@ float readRightSonar(){
 */
 void pivot(bool direction, int distance) {
 
-  float dist = distance / 2 / PI / wlRadius * 800;
   if (direction) { //choose which wheel to move
     stepperLeft.move(0);
-    stepperRight.move(dist);
+    stepperRight.move(distance);
   }
   else {
-    stepperLeft.move(dist);
+    stepperLeft.move(distance);
     stepperRight.move(0);
   }
   runAtSpeedToPosition();
@@ -691,9 +926,8 @@ void turn(int distance) {
 void forward(int distance) {
   localize();
 
-  float dist = distance / 2 / PI / wlRadius * 800;
-  stepperLeft.move(dist);
-  stepperRight.move(dist);
+  stepperLeft.move(distance);
+  stepperRight.move(distance);
   runAtSpeedToPosition();
   runToStop();
 
@@ -793,7 +1027,13 @@ void moveSquare(int side) {
   goToGoal(0, side);
   goToGoal(0, side);
 
-}/*This function, runToStop(), will run the robot until the target is achieved and
+}
+
+float inToSteps(float dist){
+  return dist / 2.0 / PI / wlRadius * 800;
+}
+
+/*This function, runToStop(), will run the robot until the target is achieved and
    then stop it
 */
 void runToStop ( void ) {
