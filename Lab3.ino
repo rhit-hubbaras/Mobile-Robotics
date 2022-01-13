@@ -79,6 +79,8 @@ float RobotPos[3];
 long stepperPos[2];
 int backupCounter = 0;
 float pastErr = 0;
+float angleAtFollow = 0;
+float angleAtTurn = 0;
 
 void setup()
 {
@@ -144,11 +146,20 @@ volatile byte state = 0;
 void loop(){
   localize();
   
+  float sensors_[6];
+  readSensors(sensors_);
+
+
+  //correction for driving backwards
   float sensors[6];
-  readSensors(sensors);
+  sensors[0]=sensors_[1];
+  sensors[1]=sensors_[0];
+  sensors[2]=sensors_[3];
+  sensors[3]=sensors_[2];
 
   int avoidDist = 0;
-  int wallDetectDist = 18;
+  int wallDetectDist = 12;
+  int frontDetectDist = 4;
 
   switch(state){
     case randWand:
@@ -179,7 +190,7 @@ void loop(){
         state = randWand;
       }
       else{
-        shyKid2(sensors);
+        shyKid2(sensors_);
       }
       break;
     
@@ -191,13 +202,14 @@ void loop(){
       if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
         state = avoid;
       }
-      else if(sensors[0] < 6){
+      else if(sensors[0] < frontDetectDist){
         state = turnRin;
       }
       else if(sensors[3] < wallDetectDist){
         state = followC;
       }
       else if(sensors[2] > wallDetectDist){
+        angleAtTurn = RobotPos[2];
         state = turnLout;
       }
       else if(0){//too much follow
@@ -219,13 +231,14 @@ void loop(){
       if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
         state = avoid;
       }
-      else if(sensors[0] < 6){
+      else if(sensors[0] < frontDetectDist){
         state = turnLin;
       }
       else if(sensors[2] < wallDetectDist){
         state = followC;
       }
       else if(sensors[3] > wallDetectDist){
+        angleAtTurn = RobotPos[2];
         state = turnRout;
       }
       else if(0){//too much follow
@@ -291,12 +304,26 @@ void loop(){
       else if(sensors[2] < wallDetectDist){
         state = followL;
       }
-      else if(0){//turned 90 degrees
-        //turn back
+      else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
+        goToAngle(-PI/2);
         state = randWand;
       }
       else{
-        //wide turn
+        
+        stepperRight.setMaxSpeed(-250);
+        stepperLeft.setMaxSpeed(-500);
+      
+        stepperRight.setSpeed(-250);
+        stepperLeft.setSpeed(-500);
+      
+        stepperRight.move(-10000);
+        stepperLeft.move(-10000);
+        int steps=0;
+          while(steps<50){
+            
+            if(stepperRight.runSpeed()){steps++;}
+            if(stepperLeft.runSpeed()){steps++;}
+         }
       }
       break;
     
@@ -310,12 +337,26 @@ void loop(){
       else if(sensors[3] < wallDetectDist){
         state = followR;
       }
-      else if(0){//turned 90 degrees
-        //turn back
+      else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
+        goToAngle(PI/2);
         state = randWand;
       }
       else{
-        //wide turn
+       
+        stepperRight.setMaxSpeed(-500);
+        stepperLeft.setMaxSpeed(-250);
+      
+        stepperRight.setSpeed(-500);
+        stepperLeft.setSpeed(-250);
+      
+        stepperRight.move(-10000);
+        stepperLeft.move(-10000);
+        int steps=0;
+          while(steps<50){
+            
+            if(stepperRight.runSpeed()){steps++;}
+            if(stepperLeft.runSpeed()){steps++;}
+          }
       }
       break;
     
@@ -328,21 +369,6 @@ void loop(){
       break;
   }
 
-//  if(sensorArray[0]<3){ //if too close in front, run away (agressive)
-//    agressiveKid(sensorArray[0]);
-//    
-//  }else if(sensorArray[0] <shyKidTrigger || sensorArray[1] <shyKidTrigger ||
-//  sensorArray[2] <shyKidTrigger || sensorArray[3] <shyKidTrigger || 
-//  sensorArray[4] <shyKidTrigger*0 || sensorArray[5] <shyKidTrigger*0){ // if close to obstacle, move away (shy)
-//    
-//    shyKid2(sensorArray);
-//    //shyKid(sensorArray);
-//
-//  }else{ //otherwise random wander or go to goal (if goal set)
-//    //randomWander();
-//    goToGoalNew(0,-48);
-//  }
-
 }
 
 
@@ -353,12 +379,16 @@ const float wlRadius = 1.66; //wheel radius in inches
 const float wbRadius = 3.76; //wheelbase radius in inches
 
 void PDcontrol(float err){
-  float kp = 7;
-  float kd = 0.5;
+  float kp = 40;
+  float kd = 80;
   float adjust = kp * err + kd * (err - pastErr);
   pastErr = err;
-
   int centerSpeed = 400;
+
+  //correction for driving backwards
+  //adjust = -adjust;
+  centerSpeed = -centerSpeed;
+
   float lSpeed = centerSpeed - adjust;
   float rSpeed = centerSpeed + adjust;
   
@@ -369,12 +399,12 @@ void PDcontrol(float err){
   stepperRight.setSpeed(rSpeed);
   stepperLeft.setSpeed(lSpeed);
 
-  stepperRight.move(10000);
-  stepperLeft.move(10000);
+  stepperRight.move(-10000);
+  stepperLeft.move(-10000);
     
   
   int steps=0;
-  while(steps<50){
+  while(steps<20){
     
     if(stepperRight.runSpeed()){steps++;}
     if(stepperLeft.runSpeed()){steps++;}
@@ -504,8 +534,9 @@ void randomWander(){
   digitalWrite(redLED, LOW);
   digitalWrite(grnLED, HIGH);
   digitalWrite(ylwLED, LOW);
-  
-  if(stepperRight.distanceToGo() <= 0 && stepperLeft.distanceToGo() <= 0){ //if at target distance, turn at rendom angle and choose random distance
+
+  //correction for driving backwards
+  if(stepperRight.distanceToGo() >= 0 && stepperLeft.distanceToGo() >= 0){ //if at target distance, turn at rendom angle and choose random distance
     stepperRight.stop();
     stepperLeft.stop();
     float x = random(0,1000000)/1000000.0;
@@ -520,17 +551,22 @@ void randomWander(){
     stepperLeft.stop();
     delay(150);
     x = random(0,1000000)/1000000.0;
-    float dist = (24-2)*x+2;
+
+    //correction for driving backwards
+    float dist = -((24-2)*x+2);
+    Serial.println(dist);
     stepperRight.move(dist/(wlRadius*2*PI)*800);
     stepperLeft.move(dist/(wlRadius*2*PI)*800);
     
   }else{ //keep moving until target distance
+    //correction for driving backwards
+    int driveSpeed = -700;
     
-    stepperRight.setMaxSpeed(700);
-    stepperLeft.setMaxSpeed(700);
+    stepperRight.setMaxSpeed(driveSpeed);
+    stepperLeft.setMaxSpeed(driveSpeed);
   
-    stepperRight.setSpeed(700);
-    stepperLeft.setSpeed(700);
+    stepperRight.setSpeed(driveSpeed);
+    stepperLeft.setSpeed(driveSpeed);
       
     
     int steps=0;
@@ -958,8 +994,18 @@ void stop() {
 void goToAngle(float angle) {
 
   float dist = angle / 2 / PI * 800 * wbRadius / wlRadius;
-  stepperLeft.setMaxSpeed(300);
+  if(dist>0){
+  stepperLeft.setMaxSpeed(-300);
   stepperRight.setMaxSpeed(300);
+  stepperLeft.setSpeed(-300);
+  stepperRight.setSpeed(300);
+  }else{
+    
+  stepperLeft.setMaxSpeed(300);
+  stepperRight.setMaxSpeed(-300);
+  stepperLeft.setSpeed(300);
+  stepperRight.setSpeed(-300);
+  }
   spin(dist);
 }
 
