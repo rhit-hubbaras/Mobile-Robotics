@@ -1,31 +1,20 @@
+/************************************
+  Lab3.ino
+  Andrew Hubbard, Nithin Saravanapandian; 1/13/22
+
+  This program introduces wall following behavior. This includes finding and following walls on the left and right sides, as well as hallways.
+  
+  New methods:
+  WallFollowingStateMachine - main method responsible for state control and behavior selection
+  outsideTurn - turns at an appropriate radius for following an outside wall; allows sensor readings
+  PDcontrol - drives the robot using PD control to minimize distance from desired path
+  bangBang - drives the robot using bang-bang control to limit the distance from desired path
+*/
+
+#include <AccelStepper.h>//include the stepper motor library
+#include <MultiStepper.h>//include multiple stepper motor library
+
 /*
-  NOTE:
-   THIS IS THE STANDARD FOR HOW TO PROPERLY COMMENT CODE
-   Header comment has program, name, author name, date created
-   Header comment has brief description of what program does
-   Header comment has list of key functions and variables created with decription
-   There are sufficient in line and block comments in the body of the program
-   Variables and functions have logical, intuitive names
-   Functions are used to improve modularity, clarity, and readability
-***********************************
-  Lab2.ino
-  Andrew Hubbard, Nithin Saravanapandian; 1/5/22
-
-  This program introduces basic obstacle avoidance behaviors
-  New behaviors are as follows:
-  agressiveKid - move forward and stop at an obstacle
-  shyKid - move away from any obstacles
-  randomWander - repeatedly move a random distance and change direction
-  localize - track changes in robot position/direction
-  goToGoalNew - go to target position inglobal coordinates. Can be interrupted by obstacle avoidance.
-
-  Interrupts
-  https://www.arduino.cc/reference/en/language/functions/external-interrupts/attachinterrupt/
-  https://www.arduino.cc/en/Tutorial/CurieTimer1Interrupt
-  https://playground.arduino.cc/code/timer1
-  https://playground.arduino.cc/Main/TimerPWMCheatsheet
-  http://arduinoinfo.mywikis.net/wiki/HOME
-
   Hardware Connections:
   pin mappings: https://www.arduino.cc/en/Hacking/PinMapping2560
   digital pin 13 - enable LED on microcontroller
@@ -40,11 +29,6 @@
   digital pin 7 - yellow LED in series with 220 ohm resistor
 
 */
-
-#include <AccelStepper.h>//include the stepper motor library
-#include <MultiStepper.h>//include multiple stepper motor library
-//#include <PIDcontroller.h>
-
 //define pin numbers
 const int rtStepPin = 50; //right stepper motor step pin (pin 44 for wireless)
 const int rtDirPin = 51;  // right stepper motor direction pin (pin 49 for wireless)
@@ -145,229 +129,21 @@ volatile byte state = 0;
  */
 void loop(){
   localize();
-  
+
   float sensors_[6];
   readSensors(sensors_);
 
 
   //correction for driving backwards
+  //remaps sensors for rear-forwards drving
   float sensors[6];
   sensors[0]=sensors_[1];
   sensors[1]=sensors_[0];
   sensors[2]=sensors_[3];
   sensors[3]=sensors_[2];
 
-  int avoidDist = 0;
-  int wallDetectDist = 12;
-  int frontDetectDist = 4;
-
-  switch(state){
-    case randWand:
-    
-    digitalWrite(redLED, LOW);
-    digitalWrite(grnLED, HIGH);
-    digitalWrite(ylwLED, LOW);
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid;
-      }
-      else if(sensors[2] < wallDetectDist){
-        state = followL;
-      }
-      else if(sensors[3] < wallDetectDist){
-        state = followR;
-      }
-      else{
-        randomWander();
-      }
-      break;
-    
-    case avoid:
-    
-    digitalWrite(redLED, LOW);
-    digitalWrite(grnLED, LOW);
-    digitalWrite(ylwLED, LOW);
-      if(sensors[0] > avoidDist && sensors[1] > avoidDist && sensors[2] > avoidDist && sensors[3] > avoidDist){
-        state = randWand;
-      }
-      else{
-        shyKid2(sensors_);
-      }
-      break;
-    
-    case followL:
-    
-    digitalWrite(redLED, LOW);
-    digitalWrite(grnLED, HIGH);
-    digitalWrite(ylwLED, HIGH);
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid;
-      }
-      else if(sensors[0] < frontDetectDist){
-        state = turnRin;
-      }
-      else if(sensors[3] < wallDetectDist){
-        state = followC;
-      }
-      else if(sensors[2] > wallDetectDist){
-        angleAtTurn = RobotPos[2];
-        state = turnLout;
-      }
-      else if(0){//too much follow
-        //turn away
-        state = randWand;
-      }
-      else{
-        float err = sensors[2]-5;
-        //bangBang(err);
-        PDcontrol(err);
-      }
-      break;
-    
-    case followR:
-    
-    digitalWrite(redLED, HIGH);
-    digitalWrite(grnLED, LOW);
-    digitalWrite(ylwLED, HIGH);
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid;
-      }
-      else if(sensors[0] < frontDetectDist){
-        state = turnLin;
-      }
-      else if(sensors[2] < wallDetectDist){
-        state = followC;
-      }
-      else if(sensors[3] > wallDetectDist){
-        angleAtTurn = RobotPos[2];
-        state = turnRout;
-      }
-      else if(0){//too much follow
-        //turn away
-        state = randWand;
-      }
-      else{
-        float err = 5-sensors[3];
-        //bangBang(err);
-        PDcontrol(err);
-      }
-      break;
-    
-    case followC:
-    
-    
-    digitalWrite(redLED, HIGH);
-    digitalWrite(grnLED, HIGH);
-    digitalWrite(ylwLED, HIGH);
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid;
-      }
-      else if(sensors[0] < 6){
-        state = turnB;
-      }
-      else if(sensors[2] > wallDetectDist){
-        state = followR;
-      }
-      else if(sensors[3] > wallDetectDist){
-        state = followL;
-      }
-      else{
-        float err = (sensors[2]-sensors[3])/2;
-        //bangBang(err);
-        PDcontrol(err);
-      }
-      break;
-    
-    case turnLin:
-    
-    digitalWrite(redLED, HIGH);
-    digitalWrite(grnLED, HIGH);
-    digitalWrite(ylwLED, LOW);
-      goToAngle(PI/2);
-      state = followL;
-      break;
-    
-    case turnRin:
-    digitalWrite(redLED, HIGH);
-    digitalWrite(grnLED, HIGH);
-    digitalWrite(ylwLED, LOW);
-      goToAngle(-PI/2);
-      state = followR;
-      break;
-    
-    case turnLout:
-    digitalWrite(redLED, LOW);
-    digitalWrite(grnLED, LOW);
-    digitalWrite(ylwLED, LOW);
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid;
-      }
-      else if(sensors[2] < wallDetectDist){
-        state = followL;
-      }
-      else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
-        goToAngle(-PI/2);
-        state = randWand;
-      }
-      else{
-        
-        stepperRight.setMaxSpeed(-250);
-        stepperLeft.setMaxSpeed(-500);
-      
-        stepperRight.setSpeed(-250);
-        stepperLeft.setSpeed(-500);
-      
-        stepperRight.move(-10000);
-        stepperLeft.move(-10000);
-        int steps=0;
-          while(steps<50){
-            
-            if(stepperRight.runSpeed()){steps++;}
-            if(stepperLeft.runSpeed()){steps++;}
-         }
-      }
-      break;
-    
-    case turnRout:
-    digitalWrite(redLED, LOW);
-    digitalWrite(grnLED, LOW);
-    digitalWrite(ylwLED, LOW);
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid;
-      }
-      else if(sensors[3] < wallDetectDist){
-        state = followR;
-      }
-      else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
-        goToAngle(PI/2);
-        state = randWand;
-      }
-      else{
-       
-        stepperRight.setMaxSpeed(-500);
-        stepperLeft.setMaxSpeed(-250);
-      
-        stepperRight.setSpeed(-500);
-        stepperLeft.setSpeed(-250);
-      
-        stepperRight.move(-10000);
-        stepperLeft.move(-10000);
-        int steps=0;
-          while(steps<50){
-            
-            if(stepperRight.runSpeed()){steps++;}
-            if(stepperLeft.runSpeed()){steps++;}
-          }
-      }
-      break;
-    
-    case turnB:
-    digitalWrite(redLED, HIGH);
-    digitalWrite(grnLED, HIGH);
-    digitalWrite(ylwLED, LOW);
-      goToAngle(PI);
-      state = followC;
-      break;
-  }
+  WallFollowingStateMachine(sensors,sensors_);
+  
 
 }
 
@@ -378,6 +154,244 @@ void loop(){
 const float wlRadius = 1.66; //wheel radius in inches
 const float wbRadius = 3.76; //wheelbase radius in inches
 
+/*
+ * state machine for wall following behavior
+ * sensors - sensor array modified for backwards driving
+ * sensors_ - unmodified sensor array
+ */
+void WallFollowingStateMachine(float sensors[],float sensors_[])
+  int avoidDist = 1;
+  int wallDetectDist = 12;
+  int frontDetectDist = 4;
+
+  switch(state){
+    case randWand: //random wander
+    
+      digitalWrite(redLED, LOW);
+      digitalWrite(grnLED, HIGH);
+      digitalWrite(ylwLED, LOW);
+      //change states according to state diagram
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid; //avoid obstacles
+      }
+      else if(sensors[2] < wallDetectDist){
+        state = followL; //wall found; follow left wall
+      }
+      else if(sensors[3] < wallDetectDist){
+        state = followR; //wall found; follow left wall
+      }
+      else{ //stay in random wander
+        randomWander();
+      }
+      break;
+
+    
+    case avoid: //Shy kid obstacle avoidance
+    
+      digitalWrite(redLED, LOW);
+      digitalWrite(grnLED, LOW);
+      digitalWrite(ylwLED, LOW);
+      //change states according to state diagram
+      if(sensors[0] > avoidDist && sensors[1] > avoidDist && sensors[2] > avoidDist && sensors[3] > avoidDist){
+        state = randWand; //obstacle cleared, return to top
+      }
+      else{ //stay in obstacle avoidance
+        shyKid2(sensors_); //use real sensor values for obstacle avoidance
+      }
+      break;
+
+    
+    case followL: //Follow left wall
+    
+      digitalWrite(redLED, LOW);
+      digitalWrite(grnLED, HIGH);
+      digitalWrite(ylwLED, HIGH);
+      //change states according to state diagram
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid; //avoid obstacles
+      }
+      else if(sensors[0] < frontDetectDist){
+        state = turnRin; //front wall found, turn right
+      }
+      else if(sensors[3] < wallDetectDist){
+        state = followC; //right wall found, follow center
+      }
+      else if(sensors[2] > wallDetectDist){
+        angleAtTurn = RobotPos[2]; //left wall lost, turn left
+        state = turnLout;
+      }
+      else if(0){//followed too long
+        //turn away
+        state = randWand;
+      }
+      else{ //keep following left wall
+        float err = sensors[2]-5;
+        //bangBang(err);
+        PDcontrol(err);
+      }
+      break;
+
+    
+    case followR: //Follow right wall
+      
+      digitalWrite(redLED, HIGH);
+      digitalWrite(grnLED, LOW);
+      digitalWrite(ylwLED, HIGH);
+      //change states according to state diagram
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid; //avoid obstacles
+      }
+      else if(sensors[0] < frontDetectDist){
+        state = turnLin; //front wall found, turn left
+      }
+      else if(sensors[2] < wallDetectDist){
+        state = followC; //left wall found, follow center
+      }
+      else if(sensors[3] > wallDetectDist){
+        angleAtTurn = RobotPos[2]; //right wall lost, turn right
+        state = turnRout;
+      }
+      else if(0){//too much follow
+        //turn away
+        state = randWand;
+      }
+      else{ //keep following right wall
+        float err = 5-sensors[3];
+        //bangBang(err);
+        PDcontrol(err);
+      }
+      break;
+
+    
+    case followC: //follow center/hallway
+    
+      digitalWrite(redLED, HIGH);
+      digitalWrite(grnLED, HIGH);
+      digitalWrite(ylwLED, HIGH);
+      //change states according to state diagram
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid; //avoid obstacles
+      }
+      else if(sensors[0] < 6){
+        state = turnB; //front wall found, turn around
+      }
+      else if(sensors[2] > wallDetectDist){
+        state = followR; //left wall lost, follow right wall
+      }
+      else if(sensors[3] > wallDetectDist){
+        state = followL; //right wall lost, follow left wall
+      }
+      else{ //keep following center
+        float err = (sensors[2]-sensors[3])/2;
+        //bangBang(err);
+        PDcontrol(err);
+      }
+      break;
+
+    
+    case turnLin: //make inside left turn
+    
+      digitalWrite(redLED, HIGH);
+      digitalWrite(grnLED, HIGH);
+      digitalWrite(ylwLED, LOW);
+      goToAngle(PI/2); //turn left, return to following left wall
+      state = followL;
+      break;
+
+    
+    case turnRin: //make inside right turn
+    
+      digitalWrite(redLED, HIGH);
+      digitalWrite(grnLED, HIGH);
+      digitalWrite(ylwLED, LOW);
+      goToAngle(-PI/2); //turn right, return to following right wall
+      state = followR;
+      break;
+
+    
+    case turnLout: //make outside left turn
+      digitalWrite(redLED, LOW);
+      digitalWrite(grnLED, LOW);
+      digitalWrite(ylwLED, LOW);
+      //change states according to state diagram
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid;//avoid obstacles
+      }
+      else if(sensors[2] < wallDetectDist){
+        state = followL; //found & follow left wall
+      }
+      else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
+        goToAngle(-PI/2); //lost wall; turn away and random wander
+        state = randWand;
+      }
+      else{//keep following outside corner
+        outsideTurn(1);
+      }
+      break;
+
+    
+    case turnRout: //make outside right turn
+      digitalWrite(redLED, LOW);
+      digitalWrite(grnLED, LOW);
+      digitalWrite(ylwLED, LOW);
+      //change states according to state diagram
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid; //avoid obstacles
+      }
+      else if(sensors[3] < wallDetectDist){
+        state = followR; //found & follow right wall
+      }
+      else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
+        goToAngle(PI/2); //lost wall; turn away and random wander
+        state = randWand;
+      }
+      else{//keep following outside corner
+        outsideTurn(-1);
+      }
+      break;
+    
+    case turnB: //turn back around
+      digitalWrite(redLED, HIGH);
+      digitalWrite(grnLED, HIGH);
+      digitalWrite(ylwLED, LOW);
+      goToAngle(PI);//turn around and return to following center
+      state = followC;
+      break;
+  }
+}
+
+/*
+ * turn in an attempt to follow outside corner
+ * dir: 1=left -1=right
+ */
+void outsideTurn(int dir){
+  if(dir==1){
+    stepperRight.setMaxSpeed(-250);
+    stepperLeft.setMaxSpeed(-500);
+  
+    stepperRight.setSpeed(-250);
+    stepperLeft.setSpeed(-500);
+  } else{
+    stepperRight.setMaxSpeed(-500);
+    stepperLeft.setMaxSpeed(-250);
+  
+    stepperRight.setSpeed(-500);
+    stepperLeft.setSpeed(-250);
+  }
+  stepperRight.move(-10000);
+  stepperLeft.move(-10000);
+  int steps=0;
+  while(steps<50){
+    
+    if(stepperRight.runSpeed()){steps++;}
+    if(stepperLeft.runSpeed()){steps++;}
+  }
+}
+
+/*
+ * Use PD control to follow the path that minimizes err
+ * err is the distance to the right of the desired path
+ */
 void PDcontrol(float err){
   float kp = 40;
   float kd = 80;
@@ -386,7 +400,6 @@ void PDcontrol(float err){
   int centerSpeed = 400;
 
   //correction for driving backwards
-  //adjust = -adjust;
   centerSpeed = -centerSpeed;
 
   float lSpeed = centerSpeed - adjust;
@@ -411,6 +424,10 @@ void PDcontrol(float err){
   }
 }
 
+/*
+ * Use bang-bang control to follow a path that keeps err less than 1 inch
+ * err is the distance to the right of the desired path
+ */
 void bangBang(float err){
   
    //Serial.println(ltIRdist);
@@ -422,16 +439,16 @@ void bangBang(float err){
     digitalWrite(ylwLED, HIGH);
     stepperRight.stop();
     stepperLeft.stop();
-    //delay(500);
+
     stepperRight.setMaxSpeed(300);
     stepperLeft.setMaxSpeed(300);
     pivot(false, inToSteps(1));
-    //delay(300);
+
     forward(inToSteps(3.5));
     pivot(true, inToSteps(0.5));
     stepperRight.stop();
     stepperLeft.stop();
-    //delay(500);
+
     
   }else if(err > 1) { //if too far, turn in
     digitalWrite(redLED, HIGH);
@@ -439,16 +456,16 @@ void bangBang(float err){
     digitalWrite(ylwLED, LOW);
     stepperRight.stop();
     stepperLeft.stop();
-    //delay(500);
+
     stepperRight.setMaxSpeed(300);
     stepperLeft.setMaxSpeed(300);
     pivot(true, inToSteps(1));
-    //delay(300);
+
     forward(inToSteps(2.5));
     pivot(false, inToSteps(0.5));
     stepperRight.stop();
     stepperLeft.stop();
-    //delay(500);
+
     }
   else{ //otherwise move forward
     digitalWrite(redLED, LOW);
@@ -469,7 +486,7 @@ void bangBang(float err){
  * go to goal functionality, utilizes local-global coordinate transform to allow for interruption.
  * 
  */
-void goToGoalNew(float x, float y){
+void goToGoal(float x, float y){
   localize();
   float dtheta = atan2(y-RobotPos[1],x-RobotPos[0])-RobotPos[2];
   
@@ -615,62 +632,6 @@ void randomWander(){
   }
  }
 
-/*
- * shy kid
- * 
- * moves forward, and away from obstacles
- * first attempt at potential fields navigation
- */
-void shyKid(float sensorArray[]){
-  digitalWrite(redLED, LOW);
-  digitalWrite(grnLED, LOW);
-  digitalWrite(ylwLED, HIGH);
-
-  float f0 = max(12-sensorArray[0],0);
-  float f1 = max(12-sensorArray[1],0);
-  float f2 = max(12-sensorArray[2],0);
-  float f3 = max(12-sensorArray[3],0);
-  float f4 = max(12-sensorArray[4],0);
-  float f5 = max(12-sensorArray[5],0);
-
-  int forwardForce = 0;
-  float fx = forwardForce-f0+1.5*f1-0.707*f4-0.707*f5;
-  float fy = -0.5*f2+0.5*f3-0.707*f4+0.707*f5;
-
-  float rx = min(max(abs(fx)-2,0),10);
-  if(fx<0){rx = -rx;}
-  float ry = min(max(abs(fy)-1,0),10);
-  if(fy<0){ry = -ry;}
-
-  float lspeed = rx*60-ry*50;
-  int ldir = 1;
-  if(lspeed<0){lspeed = -lspeed;ldir = -1;}
-  float rspeed = rx*60+ry*50;
-  int rdir = 1;
-  if(rspeed<0){rspeed = -rspeed;rdir = -1;}
-  
-  stepperLeft.move(800*ldir);
-  stepperRight.move(800*rdir);
-
-  stepperLeft.setMaxSpeed(lspeed);
-  stepperRight.setMaxSpeed(rspeed);
-  stepperLeft.setSpeed(lspeed*ldir);
-  stepperRight.setSpeed(rspeed*rdir);
-
-//  Serial.print(rx);Serial.print("   ");Serial.print(ry);Serial.print("   ");
-//  Serial.print(stepperLeft.speed());Serial.print("   ");Serial.print(stepperRight.speed());Serial.print("   ");Serial.print(stepperLeft.distanceToGo());Serial.print("   ");Serial.println(stepperRight.distanceToGo());
-  
-  
-  if(abs(lspeed)>=0.5 || abs(rspeed)>=0.5){
-    int steps=0;
-    long actiontime = millis();
-    while(steps<50 && millis()-actiontime<100){
-      
-      if(stepperRight.runSpeed()){steps++;}
-      if(stepperLeft.runSpeed()){steps++;}
-    }
-  }
-}
 
 /*
  * shy kid v2
@@ -744,32 +705,7 @@ void shyKid2(float sensorArray[]) {
       stepperLeft.stop();
       stepperRight.stop();
   }
-//    else if(sensorArray[5] < 2 || sensorArray[6] < 2){
-//      fvectorangle = VectorFrontAngle(sensorArray[0],sensorArray[5],sensorArray[6]);
-//      fvectormag = VectorFrontMag(sensorArray[0],sensorArray[5],sensorArray[6]);
-//      while(sensorArray[5] < 2 || sensorArray[6] < 2){
-//          goToAngle(-fvectorangle);
-//          reverse(fvectormag);
-//          sensorArray[5] = readLeftSonar();
-//          sensorArray[6] = readRightSonar();
-//        }
-//    }
 }
-// float VectorFrontAngle(float fIRdist, float lSonardist, float rSonardist){
-//
-//   float fvectorx = fIRdist + lSonardist*sin(PI/4) + rSonardist*sin(PI/4);
-//   float fvectory = lSonardist*cos(PI/4) - rSonardist*cos(PI/4);
-//   float fvectorangle = atan(fvectorx/fvectory);
-//
-//  return fvectorangle;
-//}
-//
-//float VectorFrontMag(float fIRdist, float lSonardist, float rSonardist){
-//
-//   float fvectormag = sqrt(fIRdist*fIRdist + lSonardist*lSonardist + rSonardist*rSonardist);
-//   
-//  return fvectormag;
-//}
 
 /*
  * Read all sensor values
@@ -782,17 +718,9 @@ void shyKid2(float sensorArray[]) {
   sensorArray[3] = readRightIR();
   sensorArray[4] = 25;//readLeftSonar();
   sensorArray[5] = 25;//readRightSonar();
-//  Serial.print(sensorArray[0]);Serial.print("  ");
-//  Serial.print(sensorArray[1]);Serial.print("  ");
-//  Serial.print(sensorArray[2]);Serial.print("  ");
-//  Serial.print(sensorArray[3]);Serial.print("  ");
-//  Serial.print(sensorArray[4]);Serial.print("  ");
-//  Serial.print(sensorArray[5]);Serial.print("  ");
-//  Serial.println(" ");
-
-  //return sensorArray;
  }
 
+// Calibration equations:
 // Front IR  Calibration : dist (in) = 24.4*exp(-0.00948*reading) + 1.66
 // Back  IR  Calibration : dist (in) = 30.4*exp(-0.01009*reading) + 1.75
 // Left  IR  Calibration : dist (in) = 55.4*exp(-0.00758*reading) + 1.48
@@ -1009,72 +937,10 @@ void goToAngle(float angle) {
   spin(dist);
 }
 
-/*
-  Move in a straight line to a given target. Coordinate system is oriented with x-axis forward and y-axis to the left.
-  x - x-coordinate of target, in inches
-  y - y-coordinate of target, in inches
-*/
-void goToGoal(float x, float y) {
-
-  float distIn = sqrt(x * x + y * y);
-  float dist = distIn / 2 / PI / wlRadius * 800;
-  float angle = atan2(y, x);
-  goToAngle(angle);
-  stepperLeft.setMaxSpeed(1000);
-  stepperRight.setMaxSpeed(1000);
-  forward(dist);
-
-}
-
 
 /*
-  Drive in a circle
-  diam - diameter of circle, in inches, as measured to the wheelbase center
-  dir - direction of circle. true : CCW, false : CW
-*/
-void moveCircle(int diam, bool dir) {
-
-
-  float radius = diam / 2;
-  float speedOuter = 500 * (wbRadius + radius) / radius;
-  float speedInner = 500 * (-wbRadius + radius) / radius;
-  float distIn = 2 * PI * radius;
-  float dist = distIn / 2 / PI / wlRadius * 800;
-  if (dir) { //choose speeds based on direction
-    stepperLeft.setMaxSpeed(speedInner);
-    stepperRight.setMaxSpeed(speedOuter);
-  } else {
-    stepperLeft.setMaxSpeed(speedOuter);
-    stepperRight.setMaxSpeed(speedInner);
-  }
-  turn(dist);
-
-}
-
-/*
-  The moveFigure8() function takes the diameter in inches as the input. It uses the moveCircle() function
-  twice with 2 different direcitons to create a figure 8 with circles of the given diameter.
-*/
-void moveFigure8(int diam) {
-
-
-  moveCircle(diam, true);
-  moveCircle(diam, false);
-}
-
-/*
-  Drive in a square.
-  side - length in inches of side
-*/
-void moveSquare(int side) {
-
-  goToGoal(side, 0);
-  goToGoal(0, side);
-  goToGoal(0, side);
-  goToGoal(0, side);
-
-}
-
+ * convert distance in inches to number of steps
+ */
 float inToSteps(float dist){
   return dist / 2.0 / PI / wlRadius * 800;
 }
