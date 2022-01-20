@@ -74,6 +74,12 @@ float pastErr = 0;
 float angleAtFollow = 0;
 float angleAtTurn = 0;
 
+//Initialize photoresistor sensors
+int lBright = 980;
+int rBright = 980;
+int lAmbiant = 650;
+int rAmbiant = 500;
+
 void setup()
 {
   pinMode(rtStepPin, OUTPUT);//sets pin as output
@@ -115,7 +121,8 @@ void setup()
   RobotPos[2]=0;
   stepperPos[0]=0;
   stepperPos[1]=0;
-  
+
+  calibratePhoto();
   localize();
 
   
@@ -146,29 +153,28 @@ volatile byte state = 0;
 #define turnRout      8
 #define turnB         9
 
+//Braitenburg state machine
+volatile byte stateBrait = 0;
+#define randWand      0
+#define avoid         1
+#define brait         2
+
 /*
  * MAIN LOOP CALL
  */
 void loop(){
-//  localize();
-//
-//  float sensors_[6];
-//  readSensors(sensors_);
-//
-//
-//  //correction for driving backwards
-//  //remaps sensors for rear-forwards drving
-//  float sensors[6];
-//  sensors[0]=sensors_[1];
-//  sensors[1]=sensors_[0];
-//  sensors[2]=sensors_[3];
-//  sensors[3]=sensors_[2];
-//
-//  WallFollowingStateMachine(sensors,sensors_);
-//  
+  localize();
 
-  //Serial.println(readRightPhoto());
-  Serial.println(readLeftPhoto());
+  float sensors[6];
+  readIRSensors(sensors);
+  remapIRSensors(sensors);
+
+  float photoSensors[2];
+  readPhotoSensors(photoSensors);
+  normalizePhotoSensors(photoSensors);
+  remapPhotoSensors(photoSensors);
+  
+  BraitenburgStateMachine(sensors,photoSensors);
 }
 
 
@@ -177,6 +183,111 @@ void loop(){
 
 const float wlRadius = 1.66; //wheel radius in inches
 const float wbRadius = 3.76; //wheelbase radius in inches
+
+/*
+ * braitenburg vehicles
+ * photoSensors - array of normalized photoresistor readings
+ * same - false if right photo controls left side; true if same side
+ * phphobic - false if light causes forward, true if light causes stop
+ * 
+ * love - same, phobic
+ * aggression - not same, not phobic
+ * explorer - not same, phobic
+ * fear - same, not phobic
+ */
+void braitenburg(float photoSensors[], bool same, bool phobic){
+  float lPhoto=0;
+  float rPhoto=0;
+  if(same){
+    lPhoto = photoSensors[1];
+    rPhoto = photoSensors[0];
+  } else {
+    lPhoto = photoSensors[0];
+    rPhoto = photoSensors[1];
+  }
+
+  if(phobic){
+    lPhoto = 1-lPhoto;//pow(1-sqrt(abs(lPhoto)),2)*sign(lPhoto);
+    rPhoto = 1-rPhoto;//pow(1-sqrt(abs(rPhoto)),2)*sign(rPhoto);
+  }
+  float lSpeed = -500*lPhoto;
+  float rSpeed = -500*rPhoto;
+
+  stepperRight.setMaxSpeed(rSpeed);
+  stepperLeft.setMaxSpeed(lSpeed);
+
+  stepperRight.setSpeed(rSpeed);
+  stepperLeft.setSpeed(lSpeed);
+  
+  stepperRight.move(10000*sign(rSpeed));
+  stepperLeft.move(10000*sign(lSpeed));
+  int steps=0;
+  long Time = millis();
+  while(steps<50 && millis()-Time<1000){
+    
+    if(stepperRight.runSpeed()){steps++;}
+    if(stepperLeft.runSpeed()){steps++;}
+  }
+}
+
+void BraitenburgStateMachine(float sensors[],float photoSensors[]){
+  int avoidDist = 3;
+  float lightDetect = 0.3;
+
+  switch(state){
+    case randWand: //random wander
+    
+      digitalWrite(redLED, LOW);
+      digitalWrite(grnLED, HIGH);
+      digitalWrite(ylwLED, LOW);
+      //change states according to state diagram
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid; //avoid obstacles
+      }
+      else if(photoSensors[0] > lightDetect || photoSensors[1] > lightDetect){
+        state = brait; //light found, follow light
+      }
+      else{ //stay in random wander
+        randomWander();
+      }
+      break;
+
+    
+    case avoid: //Shy kid obstacle avoidance
+    
+      digitalWrite(redLED, HIGH);
+      digitalWrite(grnLED, LOW);
+      digitalWrite(ylwLED, LOW);
+      //change states according to state diagram
+      if(sensors[0] > avoidDist && sensors[1] > avoidDist && sensors[2] > avoidDist && sensors[3] > avoidDist){
+        state = randWand; //obstacle cleared, return to top
+      }
+      else{ //stay in obstacle avoidance
+        shyKid2(sensors,avoidDist); //use real sensor values for obstacle avoidance
+      }
+      break;
+
+    
+    case brait: //Follow left wall
+    
+      digitalWrite(redLED, LOW);
+      digitalWrite(grnLED, HIGH);
+      digitalWrite(ylwLED, HIGH);
+      //change states according to state diagram
+      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+        state = avoid; //avoid obstacles
+      }
+      else if(photoSensors[0] < lightDetect && photoSensors[1] < lightDetect){
+        stepperRight.move(0);
+        stepperLeft.move(0);
+        state = randWand; //light lost, return to random wander
+      }
+      else{ //keep following light
+        braitenburg(photoSensors,true,true);
+      }
+      break;
+  }
+}
 
 /*
  * state machine for wall following behavior
@@ -220,7 +331,7 @@ void WallFollowingStateMachine(float sensors[],float sensors_[]){
         state = randWand; //obstacle cleared, return to top
       }
       else{ //stay in obstacle avoidance
-        shyKid2(sensors_); //use real sensor values for obstacle avoidance
+        shyKid2(sensors_,avoidDist); //use real sensor values for obstacle avoidance
       }
       break;
 
@@ -662,10 +773,7 @@ void randomWander(){
  * determines which IR sensors are "triggered"
  * impliments a logical retreat based on triggered sensors
  */
-void shyKid2(float sensorArray[]) {
-  digitalWrite(redLED, LOW);
-  digitalWrite(grnLED, LOW);
-  digitalWrite(ylwLED, HIGH);
+void shyKid2(float sensorArray[],float triggerDist) {
   
   float fvectormag = 0;
   float fvectorx = 0;
@@ -677,10 +785,10 @@ void shyKid2(float sensorArray[]) {
 //    stepperLeft.setSpeed(700);
 
   int triggers[4];
-  triggers[0]=(sensorArray[0] < 7);
-  triggers[1]=(sensorArray[1] < 7);
-  triggers[2]=(sensorArray[2] < 7);
-  triggers[3]=(sensorArray[3] < 7);
+  triggers[0]=(sensorArray[1] < triggerDist);//updated for backwards driving
+  triggers[1]=(sensorArray[0] < triggerDist);
+  triggers[2]=(sensorArray[3] < triggerDist);
+  triggers[3]=(sensorArray[2] < triggerDist);
 
   if(triggers[0]==triggers[1] && triggers[2]==triggers[3]&& triggers[1]==triggers[2]){ //if all sides are the same, do nothing
       stepperLeft.stop();
@@ -689,7 +797,7 @@ void shyKid2(float sensorArray[]) {
   else if(triggers[0]>triggers[1] && triggers[2]==triggers[3]){ //if blocked in front move back
       //reverse(800);
       reverse(400);
-      if(backupCounter++>=1){ //if blocked multiple times, try to move around obstacle
+      if(backupCounter++>=3){ //if blocked multiple times, try to move around obstacle
         goToAngle(PI/2);
         forward(1600);
         goToAngle(-PI/2);
@@ -731,6 +839,38 @@ void shyKid2(float sensorArray[]) {
   }
 }
 
+void calibratePhoto(){
+  float rAvg = 0;
+  float lAvg = 0;
+  for (int i=0; i<=4 ;i++){
+    float add = readRightPhoto();
+    Serial.println(add);
+    rAvg = rAvg+add;
+    lAvg = lAvg+readLeftPhoto();
+  }
+  rAvg = rAvg/5;
+  lAvg = lAvg/5;
+  rAmbiant = rAvg;
+  lAmbiant = lAvg;
+  Serial.println(rAmbiant);
+} 
+
+void readPhotoSensors(float (& sensorArray) [2]){
+  sensorArray[0] = readLeftPhoto();
+  sensorArray[1] = readRightPhoto();
+}
+
+void normalizePhotoSensors(float (& sensorArray) [2]){
+  sensorArray[0] = pow((sensorArray[0]-lAmbiant) / (lBright-lAmbiant),1);
+  sensorArray[1] = pow((sensorArray[1]-rAmbiant) / (rBright-rAmbiant),1);
+}
+
+void remapPhotoSensors(float (& sensorArray) [2]){
+  float temp = sensorArray[0];
+  sensorArray[0] = sensorArray[1];
+  sensorArray[1] = temp;
+}
+
 float readLeftPhoto() { 
   int avg=0;
   for (int i = 0; i <= 24 ; i++) {
@@ -754,7 +894,7 @@ float readRightPhoto() {
 /*
  * Read all sensor values
  */
- void readSensors(float (& sensorArray) [6]){
+ void readIRSensors(float (& sensorArray) [6]){
   //float sensorArray[6];
   sensorArray[0] = readFrontIR();
   sensorArray[1] = readBackIR();
@@ -763,6 +903,15 @@ float readRightPhoto() {
   sensorArray[4] = 25;//readLeftSonar();
   sensorArray[5] = 25;//readRightSonar();
  }
+
+ void remapIRSensors(float (& sensorArray) [6]){
+  float temp = sensorArray[0];
+  sensorArray[0] = sensorArray[1];
+  sensorArray[1] = temp;
+  temp = sensorArray[2];
+  sensorArray[2] = sensorArray[3];
+  sensorArray[3] = temp;
+}
 
 // Calibration equations:
 // Front IR  Calibration : dist (in) = 24.4*exp(-0.00948*reading) + 1.66
@@ -1021,5 +1170,18 @@ void runAtSpeedToPosition() {
 /*function to run both wheels continuously at a speed*/
 void runAtSpeed ( void ) {
   while (stepperRight.runSpeed() || stepperLeft.runSpeed()) {
+  }
+}
+
+/*
+ * returhs the sign of the passed nubmer
+ */
+int sign(int number){
+  if(number>0){
+    return 1;
+  }else if(number<0){
+    return -1;
+  }else{
+    return 0;
   }
 }
