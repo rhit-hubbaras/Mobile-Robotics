@@ -2,13 +2,20 @@
   Lab4.ino
   Andrew Hubbard, Nithin Saravanapandian; 1/13/22
 
-  This program introduces wall following behavior. This includes finding and following walls on the left and right sides, as well as hallways.
+  This program introduces photosensitivity to the robot. It introduces the braitenburg bot behaviors, and uses a state 
+  machine to incorperate them with avoidance and wander behaviors. It combines braitenburg bots and wall following to
+  make a homing behavior, where the robot leaves the wall to seek out a light source, and returns to the wall after
+  investigating.
   
   New methods:
-  WallFollowingStateMachine - main method responsible for state control and behavior selection
-  outsideTurn - turns at an appropriate radius for following an outside wall; allows sensor readings
-  PDcontrol - drives the robot using PD control to minimize distance from desired path
-  bangBang - drives the robot using bang-bang control to limit the distance from desired path
+  HomingStateMachine - main method responsible for wall following and light homing/docking behavior
+  BraitenburgStateMachine - main method responsible for braitenburg with obstacle avoidance behavior
+  braitenburg - moves following the rules of the braitenburg bots. bot type selected by two true/false parameters
+  calibratePhoto - calibrate photosensors
+  readPhotoSensors - read photosensor data
+  normalizePhotoSensors - reduce photosensor data to usable range
+  remapPhotoSensors - remap for backwards driving
+  remapIRSensors - remap for backwards driving
 */
 
 #include <AccelStepper.h>//include the stepper motor library
@@ -73,6 +80,7 @@ int backupCounter = 0;
 float pastErr = 0;
 float angleAtFollow = 0;
 float angleAtTurn = 0;
+float returnPos[3];
 
 //Initialize photoresistor sensors
 int lBright = 980;
@@ -152,6 +160,12 @@ volatile byte state = 0;
 #define turnLout      7
 #define turnRout      8
 #define turnB         9
+#define lightFollow   10
+#define returnWall    11
+#define lightLost     12
+
+volatile byte wallState = 0;
+int stateCounter = 0;
 
 //Braitenburg state machine
 volatile byte stateBrait = 0;
@@ -174,7 +188,8 @@ void loop(){
   normalizePhotoSensors(photoSensors);
   remapPhotoSensors(photoSensors);
   
-  BraitenburgStateMachine(sensors,photoSensors);
+  //BraitenburgStateMachine(sensors,photoSensors);
+  HomingStateMachine(sensors,photoSensors);
 }
 
 
@@ -230,6 +245,11 @@ void braitenburg(float photoSensors[], bool same, bool phobic){
   }
 }
 
+/*
+ * state machine for braitenburg bot with randomWander and avoidance behavior
+ * sensors - IR sensor array
+ * photoSensors - photo sensor array
+ */
 void BraitenburgStateMachine(float sensors[],float photoSensors[]){
   int avoidDist = 3;
   float lightDetect = 0.3;
@@ -290,208 +310,273 @@ void BraitenburgStateMachine(float sensors[],float photoSensors[]){
 }
 
 /*
- * state machine for wall following behavior
- * sensors - sensor array modified for backwards driving
- * sensors_ - unmodified sensor array
+ * state machine for wall following with light homing/docking behavior
+ * sensors - IR sensor array
+ * photoSensors - photo sensor array
  */
-void WallFollowingStateMachine(float sensors[],float sensors_[]){
+void HomingStateMachine(float sensors[],float photoSensors[]){
   int avoidDist = 1;
   int wallDetectDist = 12;
   int frontDetectDist = 4;
+  float lightDetectLevel = 0.3;
 
-  switch(state){
-    case randWand: //random wander
-    
-      digitalWrite(redLED, LOW);
-      digitalWrite(grnLED, HIGH);
-      digitalWrite(ylwLED, LOW);
-      //change states according to state diagram
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid; //avoid obstacles
-      }
-      else if(sensors[2] < wallDetectDist){
-        state = followL; //wall found; follow left wall
-      }
-      else if(sensors[3] < wallDetectDist){
-        state = followR; //wall found; follow left wall
-      }
-      else{ //stay in random wander
-        randomWander();
-      }
-      break;
-
-    
-    case avoid: //Shy kid obstacle avoidance
-    
-      digitalWrite(redLED, LOW);
-      digitalWrite(grnLED, LOW);
-      digitalWrite(ylwLED, LOW);
-      //change states according to state diagram
-      if(sensors[0] > avoidDist && sensors[1] > avoidDist && sensors[2] > avoidDist && sensors[3] > avoidDist){
-        state = randWand; //obstacle cleared, return to top
-      }
-      else{ //stay in obstacle avoidance
-        shyKid2(sensors_,avoidDist); //use real sensor values for obstacle avoidance
-      }
-      break;
-
-    
-    case followL: //Follow left wall
-    
-      digitalWrite(redLED, LOW);
-      digitalWrite(grnLED, HIGH);
-      digitalWrite(ylwLED, HIGH);
-      //change states according to state diagram
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid; //avoid obstacles
-      }
-      else if(sensors[0] < frontDetectDist){
-        state = turnRin; //front wall found, turn right
-      }
-      else if(sensors[3] < wallDetectDist){
-        state = followC; //right wall found, follow center
-      }
-      else if(sensors[2] > wallDetectDist){
-        angleAtTurn = RobotPos[2]; //left wall lost, turn left
-        state = turnLout;
-      }
-      else if(0){//followed too long
-        //turn away
-        state = randWand;
-      }
-      else{ //keep following left wall
-        float err = sensors[2]-5;
-        //bangBang(err);
-        PDcontrol(err);
-      }
-      break;
-
-    
-    case followR: //Follow right wall
+  if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
+      shyKid2(sensors,avoidDist); //avoid obstacles
+    }
+  else{
+    switch(state){
+      case randWand: //random wander
       
-      digitalWrite(redLED, HIGH);
-      digitalWrite(grnLED, LOW);
-      digitalWrite(ylwLED, HIGH);
-      //change states according to state diagram
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid; //avoid obstacles
-      }
-      else if(sensors[0] < frontDetectDist){
-        state = turnLin; //front wall found, turn left
-      }
-      else if(sensors[2] < wallDetectDist){
-        state = followC; //left wall found, follow center
-      }
-      else if(sensors[3] > wallDetectDist){
-        angleAtTurn = RobotPos[2]; //right wall lost, turn right
-        state = turnRout;
-      }
-      else if(0){//too much follow
-        //turn away
-        state = randWand;
-      }
-      else{ //keep following right wall
-        float err = 5-sensors[3];
-        //bangBang(err);
-        PDcontrol(err);
-      }
-      break;
+        digitalWrite(redLED, LOW);
+        digitalWrite(grnLED, LOW);
+        digitalWrite(ylwLED, LOW);
+        //change states according to state diagram
+        if(sensors[2] < wallDetectDist){
+          state = followL; //wall found; follow left wall
+        }
+        else if(sensors[3] < wallDetectDist){
+          state = followR; //wall found; follow left wall
+        }
+        else{ //stay in random wander
+          randomWander();
+        }
+        break;
+  
+      
+      case avoid: //Shy kid obstacle avoidance
+        //obselete; handled by subsumption
+       
+        break;
+  
+      
+      case followL: //Follow left wall
+      
+        digitalWrite(redLED, LOW);
+        digitalWrite(grnLED, HIGH);
+        digitalWrite(ylwLED, LOW);
+        //change states according to state diagram
+        if(sensors[0] < frontDetectDist){
+          state = turnRin; //front wall found, turn right
+        }
+        else if(sensors[3] < wallDetectDist){
+          state = followC; //right wall found, follow center
+        }
+        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
+          returnPos[0] = RobotPos[0];
+          returnPos[1] = RobotPos[1];
+          returnPos[2] = RobotPos[2];
+          wallState = state;
+          state = lightFollow;
+        }
+        else if(sensors[2] > wallDetectDist){
+          angleAtTurn = RobotPos[2]; //left wall lost, turn left
+          state = turnLout;
+        }
+        else if(0){//followed too long
+          //turn away
+          state = randWand;
+        }
+        else{ //keep following left wall
+          float err = sensors[2]-5;
+          //bangBang(err);
+          PDcontrol(err);
+        }
+        break;
+  
+      
+      case followR: //Follow right wall
+        
+        digitalWrite(redLED, LOW);
+        digitalWrite(grnLED, HIGH);
+        digitalWrite(ylwLED, LOW);
+        //change states according to state diagram
+        if(sensors[0] < frontDetectDist){
+          state = turnLin; //front wall found, turn left
+        }
+        else if(sensors[2] < wallDetectDist){
+          state = followC; //left wall found, follow center
+        }
+        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
+          returnPos[0] = RobotPos[0];
+          returnPos[1] = RobotPos[1];
+          returnPos[2] = RobotPos[2];
+          wallState = state;
+          state = lightFollow;
+        }
+        else if(sensors[3] > wallDetectDist){
+          angleAtTurn = RobotPos[2]; //right wall lost, turn right
+          state = turnRout;
+        }
+        else if(0){//too much follow
+          //turn away
+          state = randWand;
+        }
+        else{ //keep following right wall
+          float err = 5-sensors[3];
+          //bangBang(err);
+          PDcontrol(err);
+        }
+        break;
+  
+      
+      case followC: //follow center/hallway
+      
+        digitalWrite(redLED, HIGH);
+        digitalWrite(grnLED, HIGH);
+        digitalWrite(ylwLED, LOW);
+        //change states according to state diagram
+        if(sensors[0] < 6){
+          state = turnB; //front wall found, turn around
+        }
+        else if(sensors[2] > wallDetectDist){
+          state = followR; //left wall lost, follow right wall
+        }
+        else if(sensors[3] > wallDetectDist){
+          state = followL; //right wall lost, follow left wall
+        }
+        else{ //keep following center
+          float err = (sensors[2]-sensors[3])/2;
+          //bangBang(err);
+          PDcontrol(err);
+        }
+        break;
+  
+      
+      case turnLin: //make inside left turn
+      
+        digitalWrite(redLED, HIGH);
+        digitalWrite(grnLED, HIGH);
+        digitalWrite(ylwLED, LOW);
+        goToAngle(PI/2); //turn left, return to following left wall
+        state = followL;
+        break;
+  
+      
+      case turnRin: //make inside right turn
+      
+        digitalWrite(redLED, HIGH);
+        digitalWrite(grnLED, HIGH);
+        digitalWrite(ylwLED, LOW);
+        goToAngle(-PI/2); //turn right, return to following right wall
+        state = followR;
+        break;
+  
+      
+      case turnLout: //make outside left turn
+        digitalWrite(redLED, LOW);
+        digitalWrite(grnLED, HIGH);
+        digitalWrite(ylwLED, LOW);
+        //change states according to state diagram
+        if(sensors[2] < wallDetectDist){
+          state = followL; //found & follow left wall
+        }
+        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
+          returnPos[0] = RobotPos[0];
+          returnPos[1] = RobotPos[1];
+          returnPos[2] = RobotPos[2];
+          wallState = state;
+          state = lightFollow;
+        }
+        else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
+          goToAngle(-PI/2); //lost wall; turn away and random wander
+          state = randWand;
+        }
+        else{//keep following outside corner
+          outsideTurn(1);
+        }
+        break;
+  
+      
+      case turnRout: //make outside right turn
+        digitalWrite(redLED, LOW);
+        digitalWrite(grnLED, HIGH);
+        digitalWrite(ylwLED, LOW);
+        //change states according to state diagram
+        if(sensors[3] < wallDetectDist){
+          state = followR; //found & follow right wall
+        }
+        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
+          returnPos[0] = RobotPos[0];
+          returnPos[1] = RobotPos[1];
+          returnPos[2] = RobotPos[2];
+          wallState = state;
+          state = lightFollow;
+        }
+        else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
+          goToAngle(PI/2); //lost wall; turn away and random wander
+          state = randWand;
+        }
+        else{//keep following outside corner
+          outsideTurn(-1);
+        }
+        break;
+        
+      
+      case turnB: //turn back around
+        digitalWrite(redLED, HIGH);
+        digitalWrite(grnLED, HIGH);
+        digitalWrite(ylwLED, LOW);
+        goToAngle(PI);//turn around and return to following center
+        state = followC;
+        break;
+        
 
-    
-    case followC: //follow center/hallway
-    
-      digitalWrite(redLED, HIGH);
-      digitalWrite(grnLED, HIGH);
-      digitalWrite(ylwLED, HIGH);
-      //change states according to state diagram
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid; //avoid obstacles
-      }
-      else if(sensors[0] < 6){
-        state = turnB; //front wall found, turn around
-      }
-      else if(sensors[2] > wallDetectDist){
-        state = followR; //left wall lost, follow right wall
-      }
-      else if(sensors[3] > wallDetectDist){
-        state = followL; //right wall lost, follow left wall
-      }
-      else{ //keep following center
-        float err = (sensors[2]-sensors[3])/2;
-        //bangBang(err);
-        PDcontrol(err);
-      }
-      break;
+      case lightFollow: //follow light
+        digitalWrite(redLED, LOW);
+        digitalWrite(grnLED, LOW);
+        digitalWrite(ylwLED, HIGH);
+        //change states according to state diagram
+        if(photoSensors[0]>lightDetectLevel && photoSensors[1]>lightDetectLevel && sensors[0]<frontDetectDist){//light seen and front wall
+          for(int i=0;i<3;i++){
+            digitalWrite(redLED, HIGH); //blink lights :D
+            digitalWrite(grnLED, HIGH);
+            digitalWrite(ylwLED, HIGH);
+            delay(500);
+            digitalWrite(redLED, LOW);
+            digitalWrite(grnLED, LOW);
+            digitalWrite(ylwLED, LOW);
+            delay(500);
+          }
+          state = returnWall;
+        }
+        else if(photoSensors[0]<lightDetectLevel && photoSensors[1]<lightDetectLevel){//light lost
+          stateCounter = 0;
+          state = lightLost;
+        }
+        else{ //"love" braitenburg light following
+          braitenburg(photoSensors,true,true);
+        }
+        break;
+        
 
-    
-    case turnLin: //make inside left turn
-    
-      digitalWrite(redLED, HIGH);
-      digitalWrite(grnLED, HIGH);
-      digitalWrite(ylwLED, LOW);
-      goToAngle(PI/2); //turn left, return to following left wall
-      state = followL;
-      break;
+      case lightLost: //look for light in case of momentary drop-out
+        digitalWrite(redLED, HIGH);
+        digitalWrite(grnLED, LOW);
+        digitalWrite(ylwLED, HIGH);
+        //change states according to state diagram
+        if(stateCounter>20){//waited too long
+          state = returnWall;
+        }
+        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
+          state = lightFollow;
+        }
+        else{ //wait
+          stateCounter++;
+          delay(50);
+        }
+        break;
 
-    
-    case turnRin: //make inside right turn
-    
-      digitalWrite(redLED, HIGH);
-      digitalWrite(grnLED, HIGH);
-      digitalWrite(ylwLED, LOW);
-      goToAngle(-PI/2); //turn right, return to following right wall
-      state = followR;
-      break;
 
-    
-    case turnLout: //make outside left turn
-      digitalWrite(redLED, LOW);
-      digitalWrite(grnLED, LOW);
-      digitalWrite(ylwLED, LOW);
-      //change states according to state diagram
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid;//avoid obstacles
-      }
-      else if(sensors[2] < wallDetectDist){
-        state = followL; //found & follow left wall
-      }
-      else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
-        goToAngle(-PI/2); //lost wall; turn away and random wander
-        state = randWand;
-      }
-      else{//keep following outside corner
-        outsideTurn(1);
-      }
-      break;
-
-    
-    case turnRout: //make outside right turn
-      digitalWrite(redLED, LOW);
-      digitalWrite(grnLED, LOW);
-      digitalWrite(ylwLED, LOW);
-      //change states according to state diagram
-      if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-        state = avoid; //avoid obstacles
-      }
-      else if(sensors[3] < wallDetectDist){
-        state = followR; //found & follow right wall
-      }
-      else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
-        goToAngle(PI/2); //lost wall; turn away and random wander
-        state = randWand;
-      }
-      else{//keep following outside corner
-        outsideTurn(-1);
-      }
-      break;
-    
-    case turnB: //turn back around
-      digitalWrite(redLED, HIGH);
-      digitalWrite(grnLED, HIGH);
-      digitalWrite(ylwLED, LOW);
-      goToAngle(PI);//turn around and return to following center
-      state = followC;
-      break;
+      case returnWall: //return to position where it left wall
+        digitalWrite(redLED, HIGH);
+        digitalWrite(grnLED, LOW);
+        digitalWrite(ylwLED, LOW);
+        bool atGoal = goToGoal(returnPos[0],returnPos[1]); //go to position where it left wall
+        if(atGoal){//at location
+          goToAngle(returnPos[2]-RobotPos[2]); //go to original direction
+          state = wallState; //return to state where it left the wall
+        }
+    }
   }
 }
 
@@ -619,11 +704,12 @@ void bangBang(float err){
 
 /*
  * go to goal functionality, utilizes local-global coordinate transform to allow for interruption.
+ * returns true if at desired goal
  * 
  */
-void goToGoal(float x, float y){
+bool goToGoal(float x, float y){
   localize();
-  float dtheta = atan2(y-RobotPos[1],x-RobotPos[0])-RobotPos[2];
+  float dtheta = atan2(y-RobotPos[1],x-RobotPos[0])-RobotPos[2]-PI;
   
   if(abs(dtheta)>PI/12){ //look toward goal
     goToAngle(dtheta);
@@ -631,12 +717,15 @@ void goToGoal(float x, float y){
     float distToGo = sqrt(pow(y-RobotPos[1],2)+pow(x-RobotPos[0],2))/(wlRadius*2*PI)*800;
     if(distToGo>50){
     
-      stepperRight.setMaxSpeed(700);
-      stepperLeft.setMaxSpeed(700);
+      stepperRight.setMaxSpeed(-700);
+      stepperLeft.setMaxSpeed(-700);
     
-      stepperRight.setSpeed(700);
-      stepperLeft.setSpeed(700);
+      stepperRight.setSpeed(-700);
+      stepperLeft.setSpeed(-700);
         
+
+      stepperRight.move(-10000);
+      stepperLeft.move(-10000);
       
       int steps=0;
       while(steps<min(distToGo*2,200)){
@@ -644,6 +733,10 @@ void goToGoal(float x, float y){
         if(stepperRight.runSpeed()){steps++;}
         if(stepperLeft.runSpeed()){steps++;}
       }
+      return false;
+    }
+    else {
+      return true;
     }
   }
   
@@ -839,6 +932,9 @@ void shyKid2(float sensorArray[],float triggerDist) {
   }
 }
 
+/*
+ * calibrate "low" light threshold for photosensors
+ */
 void calibratePhoto(){
   float rAvg = 0;
   float lAvg = 0;
@@ -855,22 +951,35 @@ void calibratePhoto(){
   Serial.println(rAmbiant);
 } 
 
+/*
+ * read all photoresistor sensors
+ */
 void readPhotoSensors(float (& sensorArray) [2]){
   sensorArray[0] = readLeftPhoto();
   sensorArray[1] = readRightPhoto();
 }
 
+
+/*
+ * use calibration to convert sensor values to a number in [0,1] (nominally)
+ */
 void normalizePhotoSensors(float (& sensorArray) [2]){
   sensorArray[0] = pow((sensorArray[0]-lAmbiant) / (lBright-lAmbiant),1);
   sensorArray[1] = pow((sensorArray[1]-rAmbiant) / (rBright-rAmbiant),1);
 }
 
+/*
+ * remap photosensor values for backwards driving
+ */
 void remapPhotoSensors(float (& sensorArray) [2]){
   float temp = sensorArray[0];
   sensorArray[0] = sensorArray[1];
   sensorArray[1] = temp;
 }
 
+/*
+ * read left photosensor brightness
+ */
 float readLeftPhoto() { 
   int avg=0;
   for (int i = 0; i <= 24 ; i++) {
@@ -881,6 +990,9 @@ float readLeftPhoto() {
   return avg;//dist*49/50;
 }
 
+/*
+ * read right photosensor brightness
+ */
 float readRightPhoto() { 
   int avg=0;
   for (int i = 0; i <= 24 ; i++) {
@@ -892,7 +1004,7 @@ float readRightPhoto() {
 }
 
 /*
- * Read all sensor values
+ * Read all IR (and sonar) sensor values
  */
  void readIRSensors(float (& sensorArray) [6]){
   //float sensorArray[6];
@@ -904,6 +1016,9 @@ float readRightPhoto() {
   sensorArray[5] = 25;//readRightSonar();
  }
 
+/*
+ * remap IR sensor values for backwards driving
+ */
  void remapIRSensors(float (& sensorArray) [6]){
   float temp = sensorArray[0];
   sensorArray[0] = sensorArray[1];
@@ -1000,7 +1115,6 @@ float readLeftSonar(){
   float dist = 0.00694*value - 1.292;
   return dist*49/50;
 }
-
 
  /*
   * Read right sonar data in inches
