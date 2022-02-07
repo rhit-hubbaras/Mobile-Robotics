@@ -18,6 +18,7 @@ void setup() {
   
   size(1000,800);
   
+  println("test");
   printArray(Serial.list()); //prints all available serial ports
   
   //port = new Serial(this,"COM5",115200);
@@ -32,9 +33,10 @@ void setup() {
     .setPosition(700,400)
     .setSize(100,80);
 
-  cp5.addTextfield("Enter Topological Path Plan")
+  cp5.addTextfield("Topo_Path")
      .setPosition(700,600)
-     .setSize(200,40);
+     .setSize(200,40)
+     .setFocus(true);
 }
 
 void draw() {
@@ -55,7 +57,7 @@ void LED_Off(){
   port.write("48");
 }
 
-public void Robot_X(String text) {
+public void Topo_Path(String text) {
   println("received input value: " + text);
   //port.write("text");
 }
