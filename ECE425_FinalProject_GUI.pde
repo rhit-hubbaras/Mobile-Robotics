@@ -7,8 +7,8 @@ import processing.serial.*;
 Serial port;
 ControlP5 cp5;
 String textfield = "";
-int robotx = 1;
-int roboty = 1;
+int robotx = 5;
+int roboty = 5;
 int grid_length = 500;
 int grid_width = 500;
 int gridposx = 100;
@@ -57,5 +57,5 @@ void LED_Off(){
 
 public void Robot_X(String text) {
   println("received input value: " + text);
-  port.write("text");
+  //port.write("text");
 }
