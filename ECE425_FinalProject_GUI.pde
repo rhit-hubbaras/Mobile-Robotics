@@ -21,7 +21,7 @@ void setup() {
   println("test");
   printArray(Serial.list()); //prints all available serial ports
   
-  //port = new Serial(this,"COM5",115200);
+  port = new Serial(this,"COM5",115200);
   
   cp5 = new ControlP5(this);
   
@@ -37,6 +37,14 @@ void setup() {
      .setPosition(700,600)
      .setSize(200,40)
      .setFocus(true);
+     
+
+  //lowercase c to stop
+}
+
+void serialEvent (Serial port){
+  String status = port.readStringUntil('\n');
+  println(status);
 }
 
 void draw() {
@@ -59,5 +67,5 @@ void LED_Off(){
 
 public void Topo_Path(String text) {
   println("received input value: " + text);
-  //port.write("text");
+  port.write("t"+ text + "\n");
 }
