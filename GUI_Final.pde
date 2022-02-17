@@ -7,6 +7,7 @@ import processing.serial.*;
 Serial port;
 ControlP5 cp5;
 String textfield = "";
+String status = "IDLE";
 int robotx = 5;
 int roboty = 5;
 int grid_length = 500;
@@ -21,8 +22,14 @@ byte[][] map = new byte[4][4];
 boolean slowManual = false;
 int startx = -1;
 int starty = -1;
+int currx = -1;
+int curry = -1;
+int facing = 0;
 int goalx = -1;
 int goaly = -1;
+int[] pathx = new int[16];
+int[] pathy = new int[16];
+int pathLen = 0;
 
 
 
@@ -30,10 +37,10 @@ void setup() {
   
   size(1000,700);
   
-  println("test");
+  //println("test");
   printArray(Serial.list()); //prints all available serial ports
   
-  //port = new Serial(this,"COM5",115200);
+  port = new Serial(this,"COM5",115200);
   
   cp5 = new ControlP5(this);
   
@@ -112,11 +119,65 @@ void setup() {
   cp5.addButton("STOP")
      .setPosition(820,100)
      .setSize(75,75);
+     
+  cp5.addButton("Go_To_Goal")
+     .setPosition(700,300)
+     .setSize(200,50);
+  
+  cp5.addButton("Start_Mapping")
+     .setPosition(700,375)
+     .setSize(200,50);
+     
+  cp5.addButton("Start_Localize")
+     .setPosition(700,450)
+     .setSize(200,50);
+     
+  //pathx[0] = 0;pathy[0] = 0;
+  //pathx[1] = 1;pathy[1] = 0;
+  //pathx[2] = 2;pathy[2] = 0;
+  //pathx[3] = 3;pathy[3] = 0;
+  //pathx[4] = 3;pathy[4] = 1;
+  //pathx[5] = 3;pathy[5] = 2;
+  //pathx[6] = 2;pathy[6] = 2;
+  //pathLen = 7;
+  delay(1000);
 }
 
 void serialEvent (Serial port){
-  String status = port.readStringUntil('\n');
-  println(status);
+  String message = port.readStringUntil('\n');
+  if(message == null){
+    return;
+  }
+  println(message);
+  if(message.charAt(0)=='s'){
+    status = message.substring(1);
+  }
+  if(message.charAt(0)=='p'){
+    for(int i=0;i<16;i++){
+      pathx[i]=-1;
+      pathy[i]=-1;
+    }
+    for(int i=0;2*i+1<message.length()-2;i++){
+      pathx[i] = message.charAt(1+2*i)-'A';
+      pathy[i] = message.charAt(2+2*i)-'A';
+      pathLen = i+1;
+    }
+    
+  }
+  if(message.charAt(0)=='r'){
+    
+    currx = message.charAt(1)-'A';
+    curry = message.charAt(2)-'A';
+    facing = message.charAt(3)-'A';
+    
+  }
+  if(message.charAt(0)=='m'){
+    for(int i=0; i<4; i++){
+          for(int j=0; j<4; j++){
+            map[i][j] = byte(message.charAt(j+4*i+1)-'A');
+          }
+        }
+  }
 }
 
 void draw() {
@@ -129,7 +190,7 @@ void draw() {
   textSize(16);
   text("Start Location: (" + str(startx) +", " +str(starty) +")",300,630);
   text("Goal Location: (" + str(goalx) +", " +str(goaly) +")",300,665);
-  text("Status: " + "IDLE",100,80);
+  text("Status: " + status,100,80);
   if(slowManual){fill(180,0,0);}
   else{fill(153);}
   rect(700,160,85,15);
@@ -142,7 +203,11 @@ void drawGrid(){
     for(int j = 0; j<4; j++){
       int tilex = gridposx+gapwidth+(gapwidth+tilewidth)*i;
       int tiley = gridposy+gapwidth+(gapwidth+tilewidth)*j;
-      fill(200);
+      if((map[i][j]&16)>0){
+        fill(180,0,0);
+      }else{
+        fill(200);
+      }
       rect(tilex,tiley,tilewidth,tilewidth);
       fill(0);
       if((map[i][j] & 1)>0){
@@ -159,15 +224,35 @@ void drawGrid(){
       }
     }
   }
+  for(int i=0;i+1<pathLen;i++){
+    line(gridposx+gapwidth+tilewidth/2+pathx[i]*(tilewidth+gapwidth),gridposy+gapwidth+tilewidth/2+pathy[i]*(tilewidth+gapwidth),
+    gridposx+gapwidth+tilewidth/2+pathx[i+1]*(tilewidth+gapwidth),gridposy+gapwidth+tilewidth/2+pathy[i+1]*(tilewidth+gapwidth));
+  }
+  if(startx>=0){
+    fill(0,180,0);
+    rect(gridposx+(startx+1)*(tilewidth+gapwidth)-2*gapwidth,gridposy+2*gapwidth+(starty)*(tilewidth+gapwidth),gapwidth,gapwidth);
+  }
+  if(goalx>=0){
+    fill(180,0,0);
+    rect(gridposx+(goalx+1)*(tilewidth+gapwidth)-2*gapwidth,gridposy+2*gapwidth+(goaly)*(tilewidth+gapwidth),gapwidth,gapwidth);
+  }
+  if(currx>=0){
+    fill(0);
+    robotx = gridposx+gapwidth+tilewidth/2+currx*(gapwidth+tilewidth);
+    roboty = gridposy+gapwidth+tilewidth/2+curry*(gapwidth+tilewidth);
+    int triwidth = 15;
+    int tw = triwidth;
+    if(facing==0){
+      triangle(robotx,roboty-tw,robotx-tw,roboty+tw,robotx+tw,roboty+tw);
+    }else if(facing==1){
+      triangle(robotx+tw,roboty,robotx-tw,roboty-tw,robotx-tw,roboty+tw);
+    }else if(facing==2){
+      triangle(robotx,roboty+tw,robotx-tw,roboty-tw,robotx+tw,roboty-tw);
+    }else if(facing==3){
+      triangle(robotx-tw,roboty,robotx+tw,roboty-tw,robotx+tw,roboty+tw);
+    }
+  }
 }
-
-//void LED_Test(){
-//  port.write("49");
-//}
-
-//void LED_Off(){
-//  port.write("48");
-//}
 
 public void Topo_Path(String text) {
   println("received input value: " + text);
@@ -176,8 +261,10 @@ public void Topo_Path(String text) {
 
 public void Start_Coord(String text) {
   println("start coords: " + text);
-  startx = int(text.charAt(0))-48;
-  starty = int(text.charAt(1))-48;
+  startx = int(text.charAt(0))-'0';
+  starty = int(text.charAt(1))-'0';
+  currx = startx;
+  curry = starty;
   port.write("s"+ text + "\n");
 }
 public void Goal_Coord(String text) {
@@ -188,22 +275,41 @@ public void Goal_Coord(String text) {
 }
 
 void STOP(){
-  port.write('c');
+  port.write("c\n");
 }
 
 void Send_Map(){
   port.write('m');
   for(int i=0;i<4;i++){
     for(int j=0;j<4;j++){
-      port.write(map[i][j]);
+      port.write(map[i][j]+'A');
     }
   }
+  port.write('\n');
 }
 
-void fwd(){port.write('d');if(slowManual){port.write(0);}else{port.write(4);}}
-void bck(){port.write('d');if(slowManual){port.write(1);}else{port.write(5);}}
-void lft(){port.write('d');if(slowManual){port.write(2);}else{port.write(6);}}
-void rgt(){port.write('d');if(slowManual){port.write(3);}else{port.write(7);}}
+void Go_To_Goal(){
+  port.write("g\n");
+}
+
+void Start_Mapping(){
+  port.write("mQQQQQQQQQQQQQQQQ\n");
+  for(int i=0;i<4;i++){
+    for(int j=0;j<4;j++){
+      map[i][j] = 16;
+    }
+  }
+  port.write("n\n");
+}
+
+void Start_Localize(){
+  port.write("l\n");
+}
+
+void fwd(){port.write('d');if(slowManual){port.write(0+'A');}else{port.write(4+'A');}port.write('\n');}
+void bck(){port.write('d');if(slowManual){port.write(1+'A');}else{port.write(5+'A');}port.write('\n');}
+void lft(){port.write('d');if(slowManual){port.write(2+'A');}else{port.write(6+'A');}port.write('\n');}
+void rgt(){port.write('d');if(slowManual){port.write(3+'A');}else{port.write(7+'A');}port.write('\n');}
 
 void slo(){
   if(slowManual){slowManual = false;}

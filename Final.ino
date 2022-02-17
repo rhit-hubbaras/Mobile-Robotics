@@ -86,6 +86,9 @@ int rBright = 980;
 int lAmbiant = 650;
 int rAmbiant = 500;
 
+const float wlRadius = 1.66; //wheel radius in inches
+const float wbRadius = 3.76; //wheelbase radius in inches
+
 void setup()
 {
   pinMode(rtStepPin, OUTPUT);//sets pin as output
@@ -143,6 +146,9 @@ void setup()
 volatile byte state = 0;
 #define idle         0
 #define topo         1
+#define metPP        2
+#define mapping      3
+#define localizing   4
 
 volatile byte topoState = 0;
 #define topoStart       0
@@ -157,31 +163,40 @@ volatile byte topoState = 0;
 
 volatile byte metricState = 0;
 #define metricStart       0
-#define metricTurnL       3
-#define metricTurnR       4
-#define metricStraight    5
-#define metricStop        6
-#define metricErr         7
+#define metricSwitch      1
+#define metricLeft        2
+#define metricRight       3
+#define metricStraight    4
+#define metricStop        5
+#define metricErr         6
 
-volatile byte wallState = 0;
-int stateCounter = 0;
-
-//Braitenburg state machine
-volatile byte stateBrait = 0;
-#define randWand      0
-#define avoid         1
-#define brait         2
+volatile byte mappingState = 0;
+#define mappingStart       0
+#define mappingMeasure     1
+#define mappingUpdateMap   2
+#define mappingPlan        3
+#define mappingMove        4
+#define mappingStop        5
+#define mappingErr         6
 
 String topoDirections = "LRST";
 int topoPointer = 0;
 
 //metric path planning global variables
+byte Tmap[4][4] = {};
+int startx = -1;
+int starty = -1;
+int goalx = -1;
+int goaly = -1;
+int currx = 0;
+int curry = 0;
+int facing = 0;
 String metricDirections = "";
-String start = "";
-String finalgoal = "";
-int rownodelist[];
-int colnodelist[];
-int nodecount = 1;
+int metricPointer = 0;
+
+//mapping global variables
+float sensorSums[4];
+int readings = 0;
 
 String message = "";
 char command = '0';
@@ -203,56 +218,201 @@ void loop() {
   remapPhotoSensors(photoSensors);
 
   //read bluetooth
+  readBluetooth();
+  
+  //state machine
+  switch(state){
+    case idle:
+      break;
+    case topo:
+      topoFollowing(sensors);
+      break;
+    case metPP:
+      metricFollowing(sensors);
+      break;
+    case mapping:
+      mappingStateMachine(sensors);
+      break;
+  }
+}
+
+void readBluetooth(){
   char msg;
-  if (Serial.available()) {
+
+  if(Serial.available()){
     msg = Serial.read();
-    if (command == 'm') {
-      metricDirections = msg;
-    } else if (msg == '\n') {
-      if (command == 's') {
-        start = msg;
+    if(command == '0'){
+      command = msg;
+    }else if(msg == '\n'){
+      //topological path following
+      if(command == 't'){
+        topoDirections = message;
+        topoPointer = 0;
+        topoState = topoStart;
+        state = topo;
       }
-      else if (command == 'f') {
-        finalgoal = msg;
+      //recieving map
+      else if(command == 'm'){
+        for(int i=0; i<4; i++){
+          for(int j=0; j<4; j++){
+            Tmap[i][j] = message.charAt(j+4*i)-'A';
+          }
+        }
+        Serial.println("sMap Recieved");
       }
-    } else {
+      //recieving start position
+      else if(command == 's'){
+        startx = message.charAt(0)-'0';
+        starty = message.charAt(1)-'0';
+        currx = startx;
+        curry = starty;
+        Serial.println("sStart Recieved");
+      }
+      //recieving goal position
+      else if(command == 'f'){
+        goalx = message.charAt(0)-'0';
+        goaly = message.charAt(1)-'0';
+        Serial.println("sGoal Recieved");
+      }
+      //start metric path following
+      else if(command == 'g'){
+        metricPlanning({goalx},{goaly},1);
+        metricState = metricStart;
+        state = metPP;
+      }
+      //start mapping
+      else if(command == 'n'){
+        mappingState = mappingStart;
+        state = mapping;
+      }
+      //manual driving control
+      else if(command == 'd'){
+        Serial.println("sManual Driving");
+        int driveCommand = message.charAt(0)-'A';
+        manualDrive(driveCommand);
+      }
+      //emergency stop
+      else if(command == 'c'){
+        Serial.println("sStopped");
+        state = idle;
+      }
+      command = '0';
+      message = "";
+    }else{
       message = message + msg;
     }
+    Serial.println(message);
   }
-
-
-  //  if(Serial.available()){
-  //    msg = Serial.read();
-  //    if(command == '0'){
-  //      command = msg;
-  //    }else if(msg == '\n'){
-  //      if(command == 't'){
-  //        topoDirections = message;
-  //        topoPointer = 0;
-  //        topoState = topoStart;
-  //        state = topo;
-  //      }
-  //      command = '0';
-  //      message = "";
-  //    }else{
-  //      message = message + msg;
-  //    }
-  //    Serial.println(message);
-  //  }
-
-  //state machine including task/idle
-  //  switch(state){
-  //    case idle:
-  //      break;
-  //    case topo:
-  //      topoFollowing(sensors);
-  //      break;
-}
 }
 
+void mappingStateMachine(float sensors[]){
+  int avoidDist = 0;
+  int wallDetectDist = 12;
+  if (sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist) {
+    shyKid2(sensors, avoidDist); //avoid obstacles
+  }
+  else {
+    switch(mappingState){
+      case mappingStart:
+      {
+        mappingState = mappingMeasure;
+        break;
+      }
 
-const float wlRadius = 1.66; //wheel radius in inches
-const float wbRadius = 3.76; //wheelbase radius in inches
+      case mappingMeasure:{
+        if(readings == 10){
+          mappingState = mappingUpdateMap;
+        }else{
+          for(int i=0;i<4;i++){
+            sensorSums[i] = sensorSums[i] + sensors[i];
+          }
+          readings++;
+        }
+        break;
+      }
+        
+      case mappingUpdateMap:
+      { 
+        float sensorArray[4];
+        for(int i=0;i<4;i++){
+          sensorArray[i] = sensorSums[i]/readings;
+          sensorSums[i] = 0;
+        }
+        readings = 0;
+        bool wallDetected[4];
+        for(int i=0;i<4;i++){
+          wallDetected[i] = (sensorArray[i] < wallDetectDist);
+        }
+        //first index - robot facing
+        //second index - 0-N/1-E/2-S/3-W
+        int indexes[4][4] = {{0,3,1,2},{2,0,3,1},{1,2,0,3},{3,1,2,0}};
+        int walls = 0;
+        for(int i=0;i<4;i++){
+          if(wallDetected[indexes[facing][i]]){
+            walls = walls + (1 << i);
+          }
+        }
+        Tmap[currx][curry] = walls;
+        Serial.write('m');
+        for(int i=0;i<4;i++){
+          for(int j=0;j<4;j++){
+            Serial.write(Tmap[i][j]+'A');
+          }
+        }
+        Serial.write('\n');
+        mappingState = mappingPlan;
+        break;
+      }
+        
+      case mappingPlan:
+      {
+        int unmappedx[16];
+        int unmappedy[16];
+        int unmappedLen = 0;
+        for(int i=0;i<4;i++){
+          for(int j=0;j<4;j++){
+            if((Tmap[i][j] & 16)>0){
+              unmappedx[unmappedLen] = i;
+              unmappedy[unmappedLen] = j;
+              unmappedLen = unmappedLen + 1;
+            }
+          }
+        }
+        bool moreToMap = metricPlanning(unmappedx,unmappedy,unmappedLen);
+        metricState = metricStart;
+        if(moreToMap){
+          mappingState = mappingMove;
+        }else{
+          mappingState = mappingStop;
+        }
+        break;
+      }
+        
+      case mappingMove:{
+        if(metricState == metricStop){
+          delay(1000);
+          mappingState = mappingMeasure;
+        }else{
+          metricFollowing(sensors);
+        }
+        break;
+      }
+        
+      case mappingStop:{
+        Serial.println("sDone Mapping");
+        state = idle;
+        break;
+      }
+        
+      case mappingErr:{
+        Serial.println("sError");
+        state = idle;
+        break;
+      }
+        
+    }
+  }
+}
 
 
 void metricFollowing(float sensors[]) {
@@ -264,114 +424,220 @@ void metricFollowing(float sensors[]) {
     shyKid2(sensors, avoidDist); //avoid obstacles
   }
   else {
-
+    switch(metricState){
+      case metricStart:
+      
+        Serial.println("sMoving To Goal");
+        metricPointer = 0;
+        metricState = metricSwitch;
+        break;
+      case metricSwitch:
+      
+        Serial.write('r'); Serial.write(currx+'A'); Serial.write(curry+'A'); Serial.write(facing+'A'); Serial.write('\n');
+        delay(50);
+        if(metricPointer >= metricDirections.length()){
+          metricState = metricStop;
+        }else{
+          char command = metricDirections.charAt(metricPointer);
+          if(command == 'L'){
+            metricState = metricLeft;
+          }else if(command == 'R'){
+            metricState = metricRight;
+          }else if(command == 'S'){
+            metricState = metricStraight;
+          }
+          metricPointer = metricPointer + 1;
+        }
+        break;
+      case metricLeft:
+        goToAngle(PI/2);
+        facing = (facing + 3) % 4;
+        metricState = metricSwitch;
+        break;
+      case metricRight:
+        goToAngle(-PI/2);
+        facing = (facing + 1) % 4;
+        //Serial.println("r" + char(currx+'A') + char(curry+'A') + char(facing+'A'));
+        metricState = metricSwitch;
+        break;
+      case metricStraight:
+        reverse(inToSteps(18));
+        if(facing == 0){curry = curry - 1;}
+        if(facing == 1){currx = currx + 1;}
+        if(facing == 2){curry = curry + 1;}
+        if(facing == 3){currx = currx - 1;}
+        //Serial.println("r" + char(currx+'A') + char(curry+'A') + char(facing+'A'));
+        metricState = metricSwitch;
+        break;
+      case metricStop:
+        Serial.println("p");
+        Serial.println("sMoved");
+        state = idle;
+        break;
+      case metricErr:
+        Serial.println("p");
+        Serial.println("sError");
+        state = idle;
+        break;
+    }
   }
 }
 
-void metricPlanning(String metricDirections, String start, String finalgoal) {
+bool metricPlanning(int goalx[], int goaly[], int goalLen){
 
-  int beg = 0;
-  int mend = 1;
-  String wallmap[4][4] = {};
-  for y = 0 : 3{
-  for x = 0 : 3 {
-    wallmap[x][y] = metricDirections.substring(beg, mend);
-      beg = beg + 1;
-      mend = mend + 1;
-    }
-  }
-
-  int startx = start.charAt(0);
-  int starty = start.charAt(1);
-  int goalx = finalgoal.charAt(0);
-  int goaly = finalgoal.charAt(1);
-
-
-  wallmap[startx][starty] = "S";
-  wallmap[goalx][goaly] = "G";
-
-  int row = goalx;
-  int col = goaly;
+  Serial.println("sStarting Path Planning");
 
   // defining pathmap with steps from goal to start
-  int stepmap[4][4] = {};
-  stepmap[startx][starty] = 99;
-  stepmap[goalx][goaly] = 0;
-  int gridstep = 1;
+  int stepmap[4][4];
+  for(int i=0;i<4;i++){
+    for(int j=0;j<4;j++){
+      stepmap[i][j]=-1;
+    }
+  }
+  for(int i=0;i<goalLen;i++){
+    stepmap[goalx[i]][goaly[i]] = 0;
+  }
+  int keeplooping = 1; //0: no more changes/ 1: changes, keep going/ 2: found start, stop
   int value = 0;
 
 
-  drow = [-1, 1, 0, 0];
-  dcol = [0, 0, 1, -1];
+  //drow = [-1, 1, 0, 0];
+  //dcol = [0, 0, 1, -1];
 
-  for (int r = 0; r < 4; r++) {
-    for (int c = 0; c < 4; c++) {
-      if (stepmap[r][c] == value) {
-        for (i = 0; i < 4; i++) {
-          int rrow = row + drow[i];
-          int ccol = col + dcol[i];
-
-          String walltype = wallmap[rrow][ccol];
-          int wallcheck = walltype.toInt();
-
-          if (rrow < 0 || ccol < 0 || rrow >= 4 || ccol >= 4) {
-            null;
+  while(keeplooping == 1){
+    keeplooping = 0;
+    int updates = 0;
+    for (int i = 0; i < 4; i++) {
+      for (int j = 0; j < 4; j++) {
+        if (stepmap[i][j] == value) {
+          if(i==currx && j==curry){
+            keeplooping = 2;
           }
-          // always null regardless of direction
-          else if (wallcheck = 15) {
-            stepmap[rrow][ccol] = 98;
-            rownodelist(nodecount) = rrow;
-            colnodelist(nodecount) = ccol;
-            nodecount += 1;
+          
+          if((Tmap[i][j] & 1)==0){
+            if((Tmap[i][j-1] & 4)==0){
+              if(stepmap[i][j-1] ==-1){
+                stepmap[i][j-1] = value+1;
+                updates++;
+              }
+            }
           }
-          //wall check from looking up
-          else if ( i = 0 && wallcheck == 5 || wallcheck == 6 || wallcheck == 7 || wallcheck == 12 || wallcheck == 13 || wallcheck == 14) {
-            stepmap[rrow][ccol] = null;
-            rownodelist(nodecount) = rrow;
-            colnodelist(nodecount) = ccol;
-            nodecount += 1;
+          if((Tmap[i][j] & 2)==0){
+            if((Tmap[i+1][j] & 8) ==0){
+              if(stepmap[i+1][j] ==-1){
+                stepmap[i+1][j] = value+1;
+                updates++;
+              }
+            }
           }
-          //wall check looking down
-          else if ( i = 1 && (wallcheck % 2) != 0) {
-            stepmap[rrow][ccol] = null;
-            rownodelist(nodecount) = rrow;
-            colnodelist(nodecount) = ccol;
-            nodecount += 1;
+          if((Tmap[i][j] & 4)==0){
+            if((Tmap[i][j+1] & 1) ==0){
+              if(stepmap[i][j+1] ==-1){
+                stepmap[i][j+1] = value+1;
+                updates++;
+              }
+            }
           }
-          //wall check looking right
-          else if ( i = 2 && wallcheck > 7) {
-            stepmap[rrow][ccol] = null;
-            rownodelist(nodecount) = rrow;
-            colnodelist(nodecount) = ccol;
-            nodecount += 1;
+          if((Tmap[i][j] & 8)==0){
+            if((Tmap[i-1][j] & 2) ==0){
+              if(stepmap[i-1][j] ==-1){
+                stepmap[i-1][j] = value+1;
+                updates++;
+              }
+            }
           }
-          //wall check looking left
-          else if ( i = 0 && wallcheck == 0 || wallcheck == 3 || wallcheck == 4 || wallcheck == 7 || wallcheck == 8 || wallcheck == 12 || wallcheck == 13) {
-            stepmap[rrow][ccol] = null;
-            rownodelist(nodecount) = rrow;
-            colnodelist(nodecount) = ccol;
-            nodecount += 1;
-          }
-          //previous node/grid check
-          else if (rrow == rownodelist(nodecount) && ccol == colnodelist(nodecount)) {
-            null;
-          }
-          else {
-            stepmap[rrow][ccol] = gridstep;
-            rownodelist(nodecount) = rrow;
-            colnodelist(nodecount) = ccol;
-            nodecount += 1;
-          }
+  
         }
-        //outside neighboring grid loop
-        value = gridstep;
-        gridstep = gridstep + 1;
-
+      }
+    }
+    value = value + 1;
+    if(updates>0 && keeplooping==0){
+      keeplooping = 1;
+    }
+  }
+  int extent = stepmap[currx][curry];
+  if(extent<1){
+    metricState = metricErr;
+    return false;
+  }
+  int x = currx;
+  int y = curry;
+  int pathx[extent+1];// pathx[0] = x;
+  int pathy[extent+1];// pathy[0] = y;
+  int dirs[extent+1]; dirs[0] = facing;
+  for(int i = 0; i<=extent; i++){
+    int value = extent - i;
+    bool keeplooking = true;
+    pathx[i] = x;
+    pathy[i] = y;
+    if((Tmap[x][y] & 1)==0 && keeplooking){
+      if((Tmap[x][y-1] & 4) ==0){
+        if(stepmap[x][y-1] == value-1){
+          x = x;
+          y = y - 1;
+          dirs[i+1]=0;
+          keeplooking = false;
+        }
+      }
+    }
+    if((Tmap[x][y] & 2)==0 && keeplooking){
+      if((Tmap[x+1][y] & 8) ==0){
+        if(stepmap[x+1][y] == value-1){
+          x = x + 1;
+          y = y;
+          dirs[i+1]=1;
+          keeplooking = false;
+        }
+      }
+    }
+    if((Tmap[x][y] & 4)==0 && keeplooking){
+      if((Tmap[x][y+1] & 1) ==0){
+        if(stepmap[x][y+1] == value-1){
+          x = x;
+          y = y + 1;
+          dirs[i+1]=2;
+          keeplooking = false;
+        }
+      }
+    }
+    if((Tmap[x][y] & 8)==0 && keeplooking){
+      if((Tmap[x-1][y] & 2) ==0){
+        if(stepmap[x-1][y] == value-1){
+          x = x - 1;
+          y = y;
+          dirs[i+1]=3;
+          keeplooking = false;
+        }
       }
     }
   }
-}
 
+  metricDirections = "";
+  metricPointer = 0;
+  for(int i=0; i<extent; i++){
+    int dir1 = dirs[i];
+    int dir2 = dirs[i+1];
+    int changeDir = (4 + dir2 - dir1)%4;
+    if(changeDir==0){
+      //no change
+    }else if(changeDir==1){
+      metricDirections = metricDirections + "R";
+    }else if(changeDir==2){
+      metricDirections = metricDirections + "LL";
+    }else if(changeDir==3){
+      metricDirections = metricDirections + "L";
+    }
+    metricDirections = metricDirections + "S";
+  }
+  //Serial.println(metricDirections);
+  
+  String message = "p";
+  for(int i=0; i<=extent; i++){
+    message = message + char(pathx[i] + 'A');
+    message = message + char(pathy[i] + 'A');
+  }
+  Serial.println(message);
+  return true;
 }
 
 
@@ -423,9 +689,9 @@ void topoFollowing(float sensors[]) {
         else { //keep following left wall
 
           //float err = sensors[2]-5;
-          //bangBang(err);
           //PDcontrol(0);
-          drive(-400);
+          //drive(-400);
+          reverse(inToSteps(18));
         }
         break;
 
@@ -447,7 +713,8 @@ void topoFollowing(float sensors[]) {
           //float err = 5-sensors[3];
           //bangBang(err);
           //PDcontrol(0);
-          drive(-400);
+          //drive(-400);
+          reverse(inToSteps(18));
         }
         break;
 
@@ -494,7 +761,8 @@ void topoFollowing(float sensors[]) {
           }
           //bangBang(err);
           //PDcontrol(0);
-          drive(-400);
+          //drive(-400);
+          reverse(inToSteps(18));
         }
         break;
 
@@ -512,9 +780,9 @@ void topoFollowing(float sensors[]) {
 
           stepperRight.setSpeed(400);
           stepperLeft.setSpeed(400);
-          reverse(inToSteps(11));
+          //reverse(inToSteps(11));
           goToAngle(PI / 2);
-          reverse(inToSteps(9));
+          //reverse(inToSteps(9));
           if (current == 'S') {
             topoState = topoStraight;
           } else if (current == 'L') {
@@ -546,9 +814,9 @@ void topoFollowing(float sensors[]) {
 
           stepperRight.setSpeed(400);
           stepperLeft.setSpeed(400);
-          reverse(inToSteps(11));
+          //reverse(inToSteps(11));
           goToAngle(-PI / 2);
-          reverse(inToSteps(9));
+          //reverse(inToSteps(9));
           if (current == 'S') {
             topoState = topoStraight;
           } else if (current == 'L') {
@@ -585,6 +853,31 @@ void topoFollowing(float sensors[]) {
         state = idle;
         break;
 
+    }
+  }
+}
+
+void manualDrive(int command){
+  int dir = command & 3;
+  if((command & 4)>0){
+    if(dir == 0){
+      reverse(inToSteps(18));
+    }else if(dir == 1){
+      forward(inToSteps(18));
+    }else if(dir == 2){
+      goToAngle(-PI/2);
+    }else if(dir == 3){
+      goToAngle(PI/2);
+    }
+  }else{
+    if(dir == 0){
+      reverse(inToSteps(0.5));
+    }else if(dir == 1){
+      forward(inToSteps(0.5));
+    }else if(dir == 2){
+      goToAngle(-PI/30);
+    }else if(dir == 3){
+      goToAngle(PI/30);
     }
   }
 }
@@ -639,337 +932,6 @@ void braitenburg(float photoSensors[], bool same, bool phobic) {
   }
 }
 
-/*
-   state machine for braitenburg bot with randomWander and avoidance behavior
-   sensors - IR sensor array
-   photoSensors - photo sensor array
-*/
-void BraitenburgStateMachine(float sensors[], float photoSensors[]) {
-  int avoidDist = 3;
-  float lightDetect = 0.3;
-
-  switch (state) {
-    case randWand: //random wander
-
-      digitalWrite(redLED, LOW);
-      digitalWrite(grnLED, HIGH);
-      digitalWrite(ylwLED, LOW);
-      //change states according to state diagram
-      if (sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist) {
-        state = avoid; //avoid obstacles
-      }
-      else if (photoSensors[0] > lightDetect || photoSensors[1] > lightDetect) {
-        state = brait; //light found, follow light
-      }
-      else { //stay in random wander
-        randomWander();
-      }
-      break;
-
-
-    case avoid: //Shy kid obstacle avoidance
-
-      digitalWrite(redLED, HIGH);
-      digitalWrite(grnLED, LOW);
-      digitalWrite(ylwLED, LOW);
-      //change states according to state diagram
-      if (sensors[0] > avoidDist && sensors[1] > avoidDist && sensors[2] > avoidDist && sensors[3] > avoidDist) {
-        state = randWand; //obstacle cleared, return to top
-      }
-      else { //stay in obstacle avoidance
-        shyKid2(sensors, avoidDist); //use real sensor values for obstacle avoidance
-      }
-      break;
-
-
-    case brait: //Follow left wall
-
-      digitalWrite(redLED, LOW);
-      digitalWrite(grnLED, HIGH);
-      digitalWrite(ylwLED, HIGH);
-      //change states according to state diagram
-      if (sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist) {
-        state = avoid; //avoid obstacles
-      }
-      else if (photoSensors[0] < lightDetect && photoSensors[1] < lightDetect) {
-        stepperRight.move(0);
-        stepperLeft.move(0);
-        state = randWand; //light lost, return to random wander
-      }
-      else { //keep following light
-        braitenburg(photoSensors, true, true);
-      }
-      break;
-  }
-}
-
-/*
-   state machine for wall following with light homing/docking behavior
-   sensors - IR sensor array
-   photoSensors - photo sensor array
-*/
-/*
-  void HomingStateMachine(float sensors[],float photoSensors[]){
-  int avoidDist = 1;
-  int wallDetectDist = 12;
-  int frontDetectDist = 4;
-  float lightDetectLevel = 0.3;
-  if(sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist){
-      shyKid2(sensors,avoidDist); //avoid obstacles
-    }
-  else{
-    switch(state){
-      case randWand: //random wander
-
-        digitalWrite(redLED, LOW);
-        digitalWrite(grnLED, LOW);
-        digitalWrite(ylwLED, LOW);
-        //change states according to state diagram
-        if(sensors[2] < wallDetectDist){
-          state = followL; //wall found; follow left wall
-        }
-        else if(sensors[3] < wallDetectDist){
-          state = followR; //wall found; follow left wall
-        }
-        else{ //stay in random wander
-          randomWander();
-        }
-        break;
-
-
-      case avoid: //Shy kid obstacle avoidance
-        //obselete; handled by subsumption
-
-        break;
-
-
-      case followL: //Follow left wall
-
-        digitalWrite(redLED, LOW);
-        digitalWrite(grnLED, HIGH);
-        digitalWrite(ylwLED, LOW);
-        //change states according to state diagram
-        if(sensors[0] < frontDetectDist){
-          state = turnRin; //front wall found, turn right
-        }
-        else if(sensors[3] < wallDetectDist){
-          state = followC; //right wall found, follow center
-        }
-        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
-          returnPos[0] = RobotPos[0];
-          returnPos[1] = RobotPos[1];
-          returnPos[2] = RobotPos[2];
-          wallState = state;
-          state = lightFollow;
-        }
-        else if(sensors[2] > wallDetectDist){
-          angleAtTurn = RobotPos[2]; //left wall lost, turn left
-          state = turnLout;
-        }
-        else if(0){//followed too long
-          //turn away
-          state = randWand;
-        }
-        else{ //keep following left wall
-          float err = sensors[2]-5;
-          //bangBang(err);
-          PDcontrol(err);
-        }
-        break;
-
-
-      case followR: //Follow right wall
-
-        digitalWrite(redLED, LOW);
-        digitalWrite(grnLED, HIGH);
-        digitalWrite(ylwLED, LOW);
-        //change states according to state diagram
-        if(sensors[0] < frontDetectDist){
-          state = turnLin; //front wall found, turn left
-        }
-        else if(sensors[2] < wallDetectDist){
-          state = followC; //left wall found, follow center
-        }
-        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
-          returnPos[0] = RobotPos[0];
-          returnPos[1] = RobotPos[1];
-          returnPos[2] = RobotPos[2];
-          wallState = state;
-          state = lightFollow;
-        }
-        else if(sensors[3] > wallDetectDist){
-          angleAtTurn = RobotPos[2]; //right wall lost, turn right
-          state = turnRout;
-        }
-        else if(0){//too much follow
-          //turn away
-          state = randWand;
-        }
-        else{ //keep following right wall
-          float err = 5-sensors[3];
-          //bangBang(err);
-          PDcontrol(err);
-        }
-        break;
-
-
-      case followC: //follow center/hallway
-
-        digitalWrite(redLED, HIGH);
-        digitalWrite(grnLED, HIGH);
-        digitalWrite(ylwLED, LOW);
-        //change states according to state diagram
-        if(sensors[0] < 6){
-          state = turnB; //front wall found, turn around
-        }
-        else if(sensors[2] > wallDetectDist){
-          state = followR; //left wall lost, follow right wall
-        }
-        else if(sensors[3] > wallDetectDist){
-          state = followL; //right wall lost, follow left wall
-        }
-        else{ //keep following center
-          float err = (sensors[2]-sensors[3])/2;
-          //bangBang(err);
-          PDcontrol(err);
-        }
-        break;
-
-
-      case turnLin: //make inside left turn
-
-        digitalWrite(redLED, HIGH);
-        digitalWrite(grnLED, HIGH);
-        digitalWrite(ylwLED, LOW);
-        goToAngle(PI/2); //turn left, return to following left wall
-        state = followL;
-        break;
-
-
-      case turnRin: //make inside right turn
-
-        digitalWrite(redLED, HIGH);
-        digitalWrite(grnLED, HIGH);
-        digitalWrite(ylwLED, LOW);
-        goToAngle(-PI/2); //turn right, return to following right wall
-        state = followR;
-        break;
-
-
-      case turnLout: //make outside left turn
-        digitalWrite(redLED, LOW);
-        digitalWrite(grnLED, HIGH);
-        digitalWrite(ylwLED, LOW);
-        //change states according to state diagram
-        if(sensors[2] < wallDetectDist){
-          state = followL; //found & follow left wall
-        }
-        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
-          returnPos[0] = RobotPos[0];
-          returnPos[1] = RobotPos[1];
-          returnPos[2] = RobotPos[2];
-          wallState = state;
-          state = lightFollow;
-        }
-        else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
-          goToAngle(-PI/2); //lost wall; turn away and random wander
-          state = randWand;
-        }
-        else{//keep following outside corner
-          outsideTurn(1);
-        }
-        break;
-
-
-      case turnRout: //make outside right turn
-        digitalWrite(redLED, LOW);
-        digitalWrite(grnLED, HIGH);
-        digitalWrite(ylwLED, LOW);
-        //change states according to state diagram
-        if(sensors[3] < wallDetectDist){
-          state = followR; //found & follow right wall
-        }
-        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
-          returnPos[0] = RobotPos[0];
-          returnPos[1] = RobotPos[1];
-          returnPos[2] = RobotPos[2];
-          wallState = state;
-          state = lightFollow;
-        }
-        else if(abs(RobotPos[2]-angleAtTurn)>PI/2){//turned 90 degrees
-          goToAngle(PI/2); //lost wall; turn away and random wander
-          state = randWand;
-        }
-        else{//keep following outside corner
-          outsideTurn(-1);
-        }
-        break;
-
-
-      case turnB: //turn back around
-        digitalWrite(redLED, HIGH);
-        digitalWrite(grnLED, HIGH);
-        digitalWrite(ylwLED, LOW);
-        goToAngle(PI);//turn around and return to following center
-        state = followC;
-        break;
-
-      case lightFollow: //follow light
-        digitalWrite(redLED, LOW);
-        digitalWrite(grnLED, LOW);
-        digitalWrite(ylwLED, HIGH);
-        //change states according to state diagram
-        if(photoSensors[0]>lightDetectLevel && photoSensors[1]>lightDetectLevel && sensors[0]<frontDetectDist){//light seen and front wall
-          for(int i=0;i<3;i++){
-            digitalWrite(redLED, HIGH); //blink lights :D
-            digitalWrite(grnLED, HIGH);
-            digitalWrite(ylwLED, HIGH);
-            delay(500);
-            digitalWrite(redLED, LOW);
-            digitalWrite(grnLED, LOW);
-            digitalWrite(ylwLED, LOW);
-            delay(500);
-          }
-          state = returnWall;
-        }
-        else if(photoSensors[0]<lightDetectLevel && photoSensors[1]<lightDetectLevel){//light lost
-          stateCounter = 0;
-          state = lightLost;
-        }
-        else{ //"love" braitenburg light following
-          braitenburg(photoSensors,true,true);
-        }
-        break;
-
-      case lightLost: //look for light in case of momentary drop-out
-        digitalWrite(redLED, HIGH);
-        digitalWrite(grnLED, LOW);
-        digitalWrite(ylwLED, HIGH);
-        //change states according to state diagram
-        if(stateCounter>20){//waited too long
-          state = returnWall;
-        }
-        else if(photoSensors[0]>lightDetectLevel || photoSensors[1]>lightDetectLevel){//light found
-          state = lightFollow;
-        }
-        else{ //wait
-          stateCounter++;
-          delay(50);
-        }
-        break;
-      case returnWall: //return to position where it left wall
-        digitalWrite(redLED, HIGH);
-        digitalWrite(grnLED, LOW);
-        digitalWrite(ylwLED, LOW);
-        bool atGoal = goToGoal(returnPos[0],returnPos[1]); //go to position where it left wall
-        if(atGoal){//at location
-          goToAngle(returnPos[2]-RobotPos[2]); //go to original direction
-          state = wallState; //return to state where it left the wall
-        }
-    }
-  }
-  }
-*/
 
 /*
    turn in an attempt to follow outside corner
@@ -1043,132 +1005,6 @@ void PDcontrol(float err) {
   }
 }
 
-void drive(int Speed) {
-
-  stepperRight.setMaxSpeed(Speed);
-  stepperLeft.setMaxSpeed(Speed);
-
-  stepperRight.setSpeed(Speed);
-  stepperLeft.setSpeed(Speed);
-
-  stepperRight.move(-10000);
-  stepperLeft.move(-10000);
-
-
-  int steps = 0;
-  while (steps < 40) {
-
-    if (stepperRight.runSpeed()) {
-      steps++;
-    }
-    if (stepperLeft.runSpeed()) {
-      steps++;
-    }
-  }
-}
-
-/*
-   Use bang-bang control to follow a path that keeps err less than 1 inch
-   err is the distance to the right of the desired path
-*/
-void bangBang(float err) {
-
-  //Serial.println(ltIRdist);
-
-  if (err < -1) { //if too close, turn away
-
-    digitalWrite(redLED, LOW);
-    digitalWrite(grnLED, LOW);
-    digitalWrite(ylwLED, HIGH);
-    stepperRight.stop();
-    stepperLeft.stop();
-
-    stepperRight.setMaxSpeed(300);
-    stepperLeft.setMaxSpeed(300);
-    pivot(false, inToSteps(1));
-
-    forward(inToSteps(3.5));
-    pivot(true, inToSteps(0.5));
-    stepperRight.stop();
-    stepperLeft.stop();
-
-
-  } else if (err > 1) { //if too far, turn in
-    digitalWrite(redLED, HIGH);
-    digitalWrite(grnLED, LOW);
-    digitalWrite(ylwLED, LOW);
-    stepperRight.stop();
-    stepperLeft.stop();
-
-    stepperRight.setMaxSpeed(300);
-    stepperLeft.setMaxSpeed(300);
-    pivot(true, inToSteps(1));
-
-    forward(inToSteps(2.5));
-    pivot(false, inToSteps(0.5));
-    stepperRight.stop();
-    stepperLeft.stop();
-
-  }
-  else { //otherwise move forward
-    digitalWrite(redLED, LOW);
-    digitalWrite(grnLED, LOW);
-    digitalWrite(ylwLED, LOW);
-
-    stepperRight.setMaxSpeed(700);
-    stepperLeft.setMaxSpeed(700);
-    stepperRight.setSpeed(700);
-    stepperLeft.setSpeed(700);
-
-    forward(inToSteps(2.5));
-
-  }
-}
-
-/*
-   go to goal functionality, utilizes local-global coordinate transform to allow for interruption.
-   returns true if at desired goal
-
-*/
-bool goToGoal(float x, float y) {
-  localize();
-  float dtheta = atan2(y - RobotPos[1], x - RobotPos[0]) - RobotPos[2] - PI;
-
-  if (abs(dtheta) > PI / 12) { //look toward goal
-    goToAngle(dtheta);
-  } else { //move forward
-    float distToGo = sqrt(pow(y - RobotPos[1], 2) + pow(x - RobotPos[0], 2)) / (wlRadius * 2 * PI) * 800;
-    if (distToGo > 50) {
-
-      stepperRight.setMaxSpeed(-700);
-      stepperLeft.setMaxSpeed(-700);
-
-      stepperRight.setSpeed(-700);
-      stepperLeft.setSpeed(-700);
-
-
-      stepperRight.move(-10000);
-      stepperLeft.move(-10000);
-
-      int steps = 0;
-      while (steps < min(distToGo * 2, 200)) {
-
-        if (stepperRight.runSpeed()) {
-          steps++;
-        }
-        if (stepperLeft.runSpeed()) {
-          steps++;
-        }
-      }
-      return false;
-    }
-    else {
-      return true;
-    }
-  }
-
-}
-
 /*
    Update global coordinates based on stepper moter data
 */
@@ -1188,117 +1024,6 @@ void localize() {
   stepperPos[0] = stepperLeft.currentPosition();
   stepperPos[1] = stepperRight.currentPosition();
 }
-
-/*
-   Lab 2 new movement patterns
-
-   random wander
-   agressive kid
-   shy kid
-*/
-
-/*
-   random wander
-   randomly chooses a direction and distance
-*/
-void randomWander() {
-
-  digitalWrite(redLED, LOW);
-  digitalWrite(grnLED, HIGH);
-  digitalWrite(ylwLED, LOW);
-
-  //correction for driving backwards
-  if (stepperRight.distanceToGo() >= 0 && stepperLeft.distanceToGo() >= 0) { //if at target distance, turn at rendom angle and choose random distance
-    stepperRight.stop();
-    stepperLeft.stop();
-    float x = random(0, 1000000) / 1000000.0;
-    float angle = (x - 0.5) * PI * 2 / 3;
-    if (angle > 0) {
-      angle = angle + PI / 6;
-    }
-    else {
-      angle = angle - PI / 12;
-    }
-    stepperRight.setMaxSpeed(300);
-    stepperLeft.setMaxSpeed(300);
-    delay(150);
-    goToAngle(angle);
-    stepperRight.stop();
-    stepperLeft.stop();
-    delay(150);
-    x = random(0, 1000000) / 1000000.0;
-
-    //correction for driving backwards
-    float dist = -((24 - 2) * x + 2);
-    Serial.println(dist);
-    stepperRight.move(dist / (wlRadius * 2 * PI) * 800);
-    stepperLeft.move(dist / (wlRadius * 2 * PI) * 800);
-
-  } else { //keep moving until target distance
-    //correction for driving backwards
-    int driveSpeed = -700;
-
-    stepperRight.setMaxSpeed(driveSpeed);
-    stepperLeft.setMaxSpeed(driveSpeed);
-
-    stepperRight.setSpeed(driveSpeed);
-    stepperLeft.setSpeed(driveSpeed);
-
-
-    int steps = 0;
-    while (steps < 200) {
-
-      if (stepperRight.runSpeed()) {
-        steps++;
-      }
-      if (stepperLeft.runSpeed()) {
-        steps++;
-      }
-    }
-  }
-}
-
-/*
-   agressive kid
-   backs up from walls directly ahead,
-   moves forward otherwise
-*/
-void agressiveKid(float frIRdist) {
-  digitalWrite(redLED, HIGH);
-  digitalWrite(grnLED, LOW);
-  digitalWrite(ylwLED, LOW);
-  if (frIRdist < 3) { //if too close, stop
-
-    stepperRight.stop();
-    stepperLeft.stop();
-    delay(500);
-    stepperRight.setMaxSpeed(300);
-    stepperLeft.setMaxSpeed(300);
-    forward(-4 / (wlRadius * 2 * PI) * 800);
-    delay(200);
-
-
-  } else { //otherwise move forward
-
-    stepperRight.setMaxSpeed(700);
-    stepperLeft.setMaxSpeed(700);
-    stepperRight.setSpeed(700);
-    stepperLeft.setSpeed(700);
-
-
-    int steps = 0;
-    while (steps < 20) {
-
-      if (stepperRight.runSpeed()) {
-        steps++;
-      }
-      if (stepperLeft.runSpeed()) {
-        steps++;
-      }
-    }
-  }
-}
-
 
 /*
    shy kid v2
