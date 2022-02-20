@@ -1,20 +1,17 @@
 /************************************
   Final.ino
-  Andrew Hubbard, Nithin Saravanapandian; 1/24/22
-  This program introduces photosensitivity to the robot. It introduces the braitenburg bot behaviors, and uses a state
-  machine to incorperate them with avoidance and wander behaviors. It combines braitenburg bots and wall following to
-  make a homing behavior, where the robot leaves the wall to seek out a light source, and returns to the wall after
-  investigating.
+  Andrew Hubbard, Nithin Saravanapandian; Moravec 2/18/22
+  This program introduces bluetooth communication functionality to the robot. For a 4x4 world, it also introduces 
+  topological path following, metric path planning, world mapping, and localization. This program is designed to communicate
+  with the program GUI_Final.pde for the purpose of sending commands to and recieving information from the robot.
 
   New methods:
-  HomingStateMachine - main method responsible for wall following and light homing/docking behavior
-  BraitenburgStateMachine - main method responsible for braitenburg with obstacle avoidance behavior
-  braitenburg - moves following the rules of the braitenburg bots. bot type selected by two true/false parameters
-  calibratePhoto - calibrate photosensors
-  readPhotoSensors - read photosensor data
-  normalizePhotoSensors - reduce photosensor data to usable range
-  remapPhotoSensors - remap for backwards driving
-  remapIRSensors - remap for backwards driving
+  readBluetooth - read data from bluetooth; run code when command phrases are sent
+  topoFollowing - robot follows topological path
+  metricPlanning - calculate route to nearest goal space
+  metricFollowing - follow calculated route to goal
+  mappingStateMachine - state machine implimenting world mapping behavior
+  localizeStateMachine - state machine implimenting robot localization behavior
 */
 
 #include <AccelStepper.h>//include the stepper motor library
@@ -160,7 +157,6 @@ volatile byte topoState = 0;
 #define topoStop        6
 #define topoErr         7
 
-
 volatile byte metricState = 0;
 #define metricStart       0
 #define metricSwitch      1
@@ -179,6 +175,17 @@ volatile byte mappingState = 0;
 #define mappingStop        5
 #define mappingErr         6
 
+volatile byte localizeState = 0;
+#define localizeStart       0
+#define localizePlan        1
+#define localizeMeasure     2
+#define localizeUpdateMap   3
+#define localizeMove        4
+#define localizeStop        5
+#define localizeErr         6
+
+
+//topological path following global variables
 String topoDirections = "LRST";
 int topoPointer = 0;
 
@@ -198,6 +205,16 @@ int metricPointer = 0;
 float sensorSums[4];
 int readings = 0;
 
+//localization global variables
+int featurex[16];
+int featurey[16];
+int feature[16];
+int featureLen = 0;
+int tempx = 0;
+int tempy = 0;
+int tempFacing = 0;
+
+//bluetooth global variables
 String message = "";
 char command = '0';
 
@@ -217,10 +234,10 @@ void loop() {
   normalizePhotoSensors(photoSensors);
   remapPhotoSensors(photoSensors);
 
-  //read bluetooth
+  //read commands from bluetooth
   readBluetooth();
   
-  //state machine
+  //select behavior function based on state
   switch(state){
     case idle:
       break;
@@ -233,9 +250,30 @@ void loop() {
     case mapping:
       mappingStateMachine(sensors);
       break;
+    case localizing:
+      localizeStateMachine(sensors);
+      break;
   }
 }
 
+
+/*
+ * Read data and commands from bluetooth module
+ * command finished at \n character
+ * Commands:
+ * 0 - waiting for command
+ * t - start topological path following
+ * m - recieving map
+ * s - recieving start position
+ * f - recieving goal position
+ * g - start metric path planning/go-to-goal
+ * n - start mapping
+ * l - start localization
+ * d - manual drive
+ * c - stop all functions
+ * Data is usually an integer between -1 and 16, so data is offset by 65 (char 'A') to avoid issues 
+ * caused by data sharing the character address as \n or other special characters.
+ */
 void readBluetooth(){
   char msg;
 
@@ -251,6 +289,7 @@ void readBluetooth(){
         topoState = topoStart;
         state = topo;
       }
+      
       //recieving map
       else if(command == 'm'){
         for(int i=0; i<4; i++){
@@ -260,6 +299,7 @@ void readBluetooth(){
         }
         Serial.println("sMap Recieved");
       }
+      
       //recieving start position
       else if(command == 's'){
         startx = message.charAt(0)-'0';
@@ -268,43 +308,273 @@ void readBluetooth(){
         curry = starty;
         Serial.println("sStart Recieved");
       }
+      
       //recieving goal position
       else if(command == 'f'){
         goalx = message.charAt(0)-'0';
         goaly = message.charAt(1)-'0';
         Serial.println("sGoal Recieved");
       }
+      
       //start metric path following
       else if(command == 'g'){
-        metricPlanning({goalx},{goaly},1);
+        int paramGoalx[1]; paramGoalx[0] = goalx;
+        int paramGoaly[1]; paramGoaly[0] = goaly;
+        metricPlanning(paramGoalx,paramGoaly,1);
         metricState = metricStart;
         state = metPP;
       }
+      
       //start mapping
       else if(command == 'n'){
         mappingState = mappingStart;
         state = mapping;
       }
+      
+      //start mapping
+      else if(command == 'l'){
+        localizeState = localizeStart;
+        state = localizing;
+      }
+      
       //manual driving control
       else if(command == 'd'){
         Serial.println("sManual Driving");
         int driveCommand = message.charAt(0)-'A';
         manualDrive(driveCommand);
       }
+      
       //emergency stop
       else if(command == 'c'){
         Serial.println("sStopped");
         state = idle;
       }
+
+      //reset bluetooth message
       command = '0';
       message = "";
     }else{
       message = message + msg;
     }
-    Serial.println(message);
   }
 }
 
+/*
+ * State machine controlling localization behavior
+ * Requires:
+ * - accurate map of world
+ * - robot placed facing North (future versions may allow localization with other starting configurations)
+ * 
+ */
+void localizeStateMachine(float sensors[]){
+  int avoidDist = 0;
+  int wallDetectDist = 12;
+  if (sensors[0] < avoidDist || sensors[1] < avoidDist || sensors[2] < avoidDist || sensors[3] < avoidDist) {
+    shyKid2(sensors, avoidDist); //avoid obstacles
+  }
+  
+  else {
+    switch(localizeState){
+      case localizeStart:{
+        //reset localization variables
+        tempx = 0;
+        tempy = 0;
+        tempFacing = 0;
+        featureLen = 0;
+        localizeState = localizePlan;
+        break;
+      }
+
+      case localizePlan:{
+        //determine whether the robot is in a new location
+        bool newPlace = true;
+        for(int i=0;i<featureLen;i++){
+          if(tempx == featurex[i] && tempy == featurey[i]){
+            newPlace = false;
+            break;
+          }
+        }
+        
+        if(newPlace){  
+          //If in a new location, collect wall data
+          localizeState = localizeMeasure;
+        }else{
+          if(tempx == 0 && tempy == 0 && tempFacing == 0){
+            //If returned to original position, stuck in a loop, impossible to localize
+            localizeState = localizeErr;
+          }else{
+            //Otherwise, keep looking for new information
+            localizeState = localizeMove;
+          }
+        }
+      }
+
+      case localizeMeasure:{
+        //Take 20 readings of IR sensors
+        if(readings == 20){
+          localizeState = localizeUpdateMap;
+        }else{
+          for(int i=0;i<4;i++){
+            sensorSums[i] = sensorSums[i] + sensors[i];
+          }
+          readings++;
+        }
+        break;
+      }
+        
+      case localizeUpdateMap:{ 
+        //take average of readings
+        float sensorArray[4];
+        for(int i=0;i<4;i++){
+          sensorArray[i] = sensorSums[i]/readings;
+          sensorSums[i] = 0;
+        }
+        readings = 0;
+
+        //determine which walls exist
+        bool wallDetected[4];
+        for(int i=0;i<4;i++){
+          wallDetected[i] = (sensorArray[i] < wallDetectDist);
+        }
+        //first index - robot facing
+        //second index - 0-N/1-E/2-S/3-W
+        int indexes[4][4] = {{0,3,1,2},{2,0,3,1},{1,2,0,3},{3,1,2,0}};
+
+        //get 4-bit code for wall structure
+        int walls = 0;
+        for(int i=0;i<4;i++){
+          if(wallDetected[indexes[tempFacing][i]]){
+            walls = walls + (1 << i);
+          }
+        }
+        
+        //add wall layout to feature list
+        featurex[featureLen] = tempx;
+        featurey[featureLen] = tempy;
+        feature[featureLen] = walls;
+        featureLen++;
+        
+        //check all possible start locations
+        int minx = 0;
+        int maxx = 0;
+        int miny = 0;
+        int maxy = 0;
+        for(int i=0;i<featureLen;i++){
+          if(featurex[i]>maxx){
+            maxx = featurex[i];
+          }
+          if(featurex[i]<minx){
+            minx = featurex[i];
+          }
+          if(featurey[i]>maxy){
+            maxy = featurey[i];
+          }
+          if(featurey[i]<miny){
+            miny = featurey[i];
+          }
+        }
+
+        //loop through possible start locations
+        int numValid = 0;
+        int possStartx = 0;
+        int possStarty = 0;
+        for(int i = -minx;i<4-maxx;i++){
+          for(int j = -miny;j<4-maxy;j++){
+            bool valid = true;
+            //loop through observed features. If any don't match, rule out start position
+            for(int k=0;k<featureLen;k++){
+              if(Tmap[i+featurex[k]][j+featurey[k]] != feature[k]){
+                valid = false;
+              }
+            }
+            //if start is valid, add to counter and save start position
+            if(valid){
+              numValid++;
+              possStartx = i;
+              possStarty = j;
+            }
+          }
+        }
+
+        if(numValid==0){
+          //Localization is impossible, measurements or reference map may be wrong.
+          localizeState = localizeErr;
+        }else if (numValid ==1){
+          //Start location uniquely identified. Send information to GUI and halt.
+          Serial.write('t'); Serial.write(possStartx+'A'); Serial.write(possStarty+'A'); Serial.write('\n');
+          startx = possStartx;
+          starty = possStarty;
+          currx = tempx+possStartx;
+          curry = tempy+possStarty;
+          Serial.write('r'); Serial.write(currx+'A'); Serial.write(curry+'A'); Serial.write(facing+'A'); Serial.write('\n');
+          
+          localizeState = localizeStop;
+        }else if (numValid >1){
+          //Start location not uniquely identified. Move to new location.
+          localizeState = localizeMove; 
+        }else{localizeState = localizeErr;}
+        break;
+      }
+        
+      case localizeMove:{
+        //Move robot somewhere else in the world
+        //Robot moves one space at a time, using a right-wall following algorithm
+        //Keeps track of robot position and rotation, compared to start location.
+        
+        bool wallDetected[4];
+        for(int i=0;i<4;i++){
+          wallDetected[i] = (sensors[i] < wallDetectDist);
+        }
+        if(!wallDetected[3]){
+          goToAngle(-PI/2);
+          tempFacing = (tempFacing + 1) % 4;
+        }else if(!wallDetected[0]){
+          //no turn
+        }else if(!wallDetected[2]){
+          goToAngle(PI/2);
+          tempFacing = (tempFacing + 3) % 4;
+        }else if(!wallDetected[1]){
+          goToAngle(PI);
+          tempFacing = (tempFacing + 2) % 4;
+        }else{
+          //error state?
+          break;
+        }
+        //go forward
+        reverse(inToSteps(18));
+        if(tempFacing == 0){tempy = tempy - 1;}
+        if(tempFacing == 1){tempx = tempx + 1;}
+        if(tempFacing == 2){tempy = tempy + 1;}
+        if(tempFacing == 3){tempx = tempx - 1;}
+
+        localizeState = localizePlan;
+        break;
+      }
+        
+      case localizeStop:{
+        //Localization finished; halt
+        Serial.println("sDone Localizing");
+        state = idle;
+        break;
+      }
+        
+      case localizeErr:{
+        //Localization impossible; halt
+        Serial.println("sError");
+        state = idle;
+        break;
+      }
+        
+    }
+  }
+}
+
+/*
+ * State machine controlling mapping behavior
+ * Reauires:
+ * - accurate start position
+ * - robot rotation is consistent with GUI representation
+ */
 void mappingStateMachine(float sensors[]){
   int avoidDist = 0;
   int wallDetectDist = 12;
@@ -313,14 +583,15 @@ void mappingStateMachine(float sensors[]){
   }
   else {
     switch(mappingState){
-      case mappingStart:
-      {
+      case mappingStart:{
+        //reset mapping variables
         mappingState = mappingMeasure;
         break;
       }
 
       case mappingMeasure:{
-        if(readings == 10){
+        //take 20 measurements from IR sensors
+        if(readings == 20){
           mappingState = mappingUpdateMap;
         }else{
           for(int i=0;i<4;i++){
@@ -331,14 +602,16 @@ void mappingStateMachine(float sensors[]){
         break;
       }
         
-      case mappingUpdateMap:
-      { 
+      case mappingUpdateMap:{ 
+        //Average sensor measurements
         float sensorArray[4];
         for(int i=0;i<4;i++){
           sensorArray[i] = sensorSums[i]/readings;
           sensorSums[i] = 0;
         }
         readings = 0;
+
+        //Determine which walls are present
         bool wallDetected[4];
         for(int i=0;i<4;i++){
           wallDetected[i] = (sensorArray[i] < wallDetectDist);
@@ -346,13 +619,19 @@ void mappingStateMachine(float sensors[]){
         //first index - robot facing
         //second index - 0-N/1-E/2-S/3-W
         int indexes[4][4] = {{0,3,1,2},{2,0,3,1},{1,2,0,3},{3,1,2,0}};
+
+        //calculate 4-bit wall representation
         int walls = 0;
         for(int i=0;i<4;i++){
           if(wallDetected[indexes[facing][i]]){
             walls = walls + (1 << i);
           }
         }
+        
+        //write wall representation to map at current position
         Tmap[currx][curry] = walls;
+
+        //send current map to GUI
         Serial.write('m');
         for(int i=0;i<4;i++){
           for(int j=0;j<4;j++){
@@ -364,8 +643,8 @@ void mappingStateMachine(float sensors[]){
         break;
       }
         
-      case mappingPlan:
-      {
+      case mappingPlan:{
+        //identify all unmapped cells
         int unmappedx[16];
         int unmappedy[16];
         int unmappedLen = 0;
@@ -378,11 +657,14 @@ void mappingStateMachine(float sensors[]){
             }
           }
         }
+        //use metric path planning to find route to unmapped space
         bool moreToMap = metricPlanning(unmappedx,unmappedy,unmappedLen);
         metricState = metricStart;
         if(moreToMap){
+          //if path to unmapped space found, move
           mappingState = mappingMove;
         }else{
+          //otherwise, halt
           mappingState = mappingStop;
         }
         break;
@@ -390,21 +672,25 @@ void mappingStateMachine(float sensors[]){
         
       case mappingMove:{
         if(metricState == metricStop){
+          //if at target location, pause and measure
           delay(1000);
           mappingState = mappingMeasure;
         }else{
+          //follow metric path planning
           metricFollowing(sensors);
         }
         break;
       }
         
       case mappingStop:{
+        //all reachable spaces mapped; halt
         Serial.println("sDone Mapping");
         state = idle;
         break;
       }
         
       case mappingErr:{
+        //some error occured; halt
         Serial.println("sError");
         state = idle;
         break;
@@ -414,7 +700,10 @@ void mappingStateMachine(float sensors[]){
   }
 }
 
-
+/*
+ * Follow path determined by metric path planning
+ * Recieves commands to move one space forward, turn 90 degrees left, and turn 90 degrees left
+ */
 void metricFollowing(float sensors[]) {
   int avoidDist = 0;
   int wallDetectDist = 12;
@@ -426,13 +715,14 @@ void metricFollowing(float sensors[]) {
   else {
     switch(metricState){
       case metricStart:
-      
+        //reset path following variables
         Serial.println("sMoving To Goal");
         metricPointer = 0;
         metricState = metricSwitch;
         break;
+        
       case metricSwitch:
-      
+        //read path directions and choose next state
         Serial.write('r'); Serial.write(currx+'A'); Serial.write(curry+'A'); Serial.write(facing+'A'); Serial.write('\n');
         delay(50);
         if(metricPointer >= metricDirections.length()){
@@ -449,18 +739,24 @@ void metricFollowing(float sensors[]) {
           metricPointer = metricPointer + 1;
         }
         break;
+        
       case metricLeft:
+        //Turn 90 degrees left, update rotation
         goToAngle(PI/2);
         facing = (facing + 3) % 4;
         metricState = metricSwitch;
         break;
+        
       case metricRight:
+        //Turn 90 degrees right, update rotation
         goToAngle(-PI/2);
         facing = (facing + 1) % 4;
         //Serial.println("r" + char(currx+'A') + char(curry+'A') + char(facing+'A'));
         metricState = metricSwitch;
         break;
+        
       case metricStraight:
+        //Drive one space forward, update position
         reverse(inToSteps(18));
         if(facing == 0){curry = curry - 1;}
         if(facing == 1){currx = currx + 1;}
@@ -469,12 +765,16 @@ void metricFollowing(float sensors[]) {
         //Serial.println("r" + char(currx+'A') + char(curry+'A') + char(facing+'A'));
         metricState = metricSwitch;
         break;
+        
       case metricStop:
+        //Reached end of directions, halt
         Serial.println("p");
         Serial.println("sMoved");
         state = idle;
         break;
+        
       case metricErr:
+        //Error occurred, halt
         Serial.println("p");
         Serial.println("sError");
         state = idle;
@@ -483,37 +783,59 @@ void metricFollowing(float sensors[]) {
   }
 }
 
+/*
+ * Use grassfire expansion path planning to plan route to a goal space
+ * Parameters:
+ * - goalx: x-coordinates of goal locations
+ * - goaly: y-coordinates of goal locations
+ * - goalLen: number of goal locations
+ * 
+ * Returns a boolean if a path is found from the current location to a goal location
+ * Writes to GUI regarding found path
+ * Writes metric directions for path following
+ */
 bool metricPlanning(int goalx[], int goaly[], int goalLen){
 
   Serial.println("sStarting Path Planning");
-
+  
   // defining pathmap with steps from goal to start
+  // Values:
+  // -1: undetermined
+  // 0:  goal location
+  // 1+: number of steps to nearest goal location
+
+  //new stepmap
   int stepmap[4][4];
   for(int i=0;i<4;i++){
     for(int j=0;j<4;j++){
       stepmap[i][j]=-1;
     }
   }
+
+  //place goal locations
   for(int i=0;i<goalLen;i++){
     stepmap[goalx[i]][goaly[i]] = 0;
   }
-  int keeplooping = 1; //0: no more changes/ 1: changes, keep going/ 2: found start, stop
-  int value = 0;
 
 
-  //drow = [-1, 1, 0, 0];
-  //dcol = [0, 0, 1, -1];
+  int keeplooping = 1; //0: no more changes, stop/ 1: changes, keep going/ 2: found start, stop
+  int value = 0; //cell value to look for on current iteration
 
+  //Fill stepmap with values as defined above using grassfire expansion
   while(keeplooping == 1){
     keeplooping = 0;
     int updates = 0;
+    //loop through all squares
     for (int i = 0; i < 4; i++) {
       for (int j = 0; j < 4; j++) {
+        //if the current square has the current value:
         if (stepmap[i][j] == value) {
+          //if the current square is the robot's location, stop grassfire expansion
           if(i==currx && j==curry){
             keeplooping = 2;
           }
-          
+
+          //if North wall is absent, and South wall of northern space is absent, and northern space is undetermined, update northern space to next value
           if((Tmap[i][j] & 1)==0){
             if((Tmap[i][j-1] & 4)==0){
               if(stepmap[i][j-1] ==-1){
@@ -522,6 +844,7 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
               }
             }
           }
+          //if East wall is absent, and West wall of eastern space is absent, and eastern space is undetermined, update eastern space to next value
           if((Tmap[i][j] & 2)==0){
             if((Tmap[i+1][j] & 8) ==0){
               if(stepmap[i+1][j] ==-1){
@@ -530,6 +853,7 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
               }
             }
           }
+          //if South wall is absent, and North wall of southern space is absent, and southern space is undetermined, update southern space to next value
           if((Tmap[i][j] & 4)==0){
             if((Tmap[i][j+1] & 1) ==0){
               if(stepmap[i][j+1] ==-1){
@@ -538,6 +862,7 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
               }
             }
           }
+          //if West wall is absent, and East wall of western space is absent, and western space is undetermined, update western space to next value
           if((Tmap[i][j] & 8)==0){
             if((Tmap[i-1][j] & 2) ==0){
               if(stepmap[i-1][j] ==-1){
@@ -550,26 +875,46 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
         }
       }
     }
+    //increment value
     value = value + 1;
+    //if robot location not reached and some cells were updated, keep looping
     if(updates>0 && keeplooping==0){
       keeplooping = 1;
     }
   }
+ 
+  //Determine number of spaces from robot to goal
   int extent = stepmap[currx][curry];
   if(extent<1){
+    //If no path exists or already at goal, halt
     metricState = metricErr;
     return false;
   }
+
+  //use stepmap to trace path from robot to goal
   int x = currx;
   int y = curry;
-  int pathx[extent+1];// pathx[0] = x;
-  int pathy[extent+1];// pathy[0] = y;
-  int dirs[extent+1]; dirs[0] = facing;
+  int pathx[extent+1];
+  int pathy[extent+1];
+  int dirs[extent+1];
+  dirs[0] = facing;
   for(int i = 0; i<=extent; i++){
+    //value decreases from robot square to zero
     int value = extent - i;
-    bool keeplooking = true;
+    //record cursor position
     pathx[i] = x;
     pathy[i] = y;
+
+    //check directions for: 
+    // - no wall blocking
+    // - no wall in neighbor's cell blocking
+    // - neighbor's cell is 1 space closer to goal
+    //if found:
+    // - move cursor in direction
+    // - record path direction
+    // - stop checking directions
+    bool keeplooking = true;
+    //check North
     if((Tmap[x][y] & 1)==0 && keeplooking){
       if((Tmap[x][y-1] & 4) ==0){
         if(stepmap[x][y-1] == value-1){
@@ -580,6 +925,7 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
         }
       }
     }
+    //check East
     if((Tmap[x][y] & 2)==0 && keeplooking){
       if((Tmap[x+1][y] & 8) ==0){
         if(stepmap[x+1][y] == value-1){
@@ -590,6 +936,7 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
         }
       }
     }
+    //check South
     if((Tmap[x][y] & 4)==0 && keeplooking){
       if((Tmap[x][y+1] & 1) ==0){
         if(stepmap[x][y+1] == value-1){
@@ -600,6 +947,7 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
         }
       }
     }
+    //check West
     if((Tmap[x][y] & 8)==0 && keeplooking){
       if((Tmap[x-1][y] & 2) ==0){
         if(stepmap[x-1][y] == value-1){
@@ -612,12 +960,16 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
     }
   }
 
+  //Decode path directions into robot instructions
   metricDirections = "";
   metricPointer = 0;
+  //loop though directions
   for(int i=0; i<extent; i++){
     int dir1 = dirs[i];
     int dir2 = dirs[i+1];
+    //calculate difference in direction between steps
     int changeDir = (4 + dir2 - dir1)%4;
+    //depending on direction difference, turn left/right/about/hold direction and drive forward
     if(changeDir==0){
       //no change
     }else if(changeDir==1){
@@ -629,8 +981,8 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
     }
     metricDirections = metricDirections + "S";
   }
-  //Serial.println(metricDirections);
-  
+
+  //send path coordinates to GUI
   String message = "p";
   for(int i=0; i<=extent; i++){
     message = message + char(pathx[i] + 'A');
@@ -640,7 +992,14 @@ bool metricPlanning(int goalx[], int goaly[], int goalLen){
   return true;
 }
 
-
+/*
+ * Topological path following behavior
+ * Directions:
+ * S - Drive straight until a wall is in front, then turn accourding to next command 
+ * L - Drive until left wall missing, then turn
+ * R - Drive until right wall missing, then turn
+ * T - terminate
+ */
 void topoFollowing(float sensors[]) {
   int avoidDist = 0;
   int wallDetectDist = 12;
@@ -650,14 +1009,13 @@ void topoFollowing(float sensors[]) {
     shyKid2(sensors, avoidDist); //avoid obstacles
   }
   else {
+    //Identify current command - determines next state
     char current = '0';
     if (topoPointer < topoDirections.length()) {
       current = topoDirections[topoPointer];
     }
-    //Serial.println(current);
-    //Serial.println(topoState);
     switch (topoState) {
-      case topoStart:
+      case topoStart:  //reset variables to initial state, choose next state
         topoPointer = 0;
         if (current == 'L') {
           topoState = topoFollowL;
@@ -678,19 +1036,19 @@ void topoFollowing(float sensors[]) {
         digitalWrite(redLED, HIGH);
         digitalWrite(grnLED, LOW);
         digitalWrite(ylwLED, LOW);
-        //change states according to state diagram
         if (sensors[0] < frontDetectDist) {
+          // front wall detected, cannot continue following left wall
           topoState = topoErr;
         }
         else if (sensors[2] > wallDetectDist) {
+          //turn left
           angleAtTurn = RobotPos[2];
           topoState = topoTurnL;
         }
         else { //keep following left wall
 
           //float err = sensors[2]-5;
-          //PDcontrol(0);
-          //drive(-400);
+          //PDcontrol(err);
           reverse(inToSteps(18));
         }
         break;
@@ -701,19 +1059,18 @@ void topoFollowing(float sensors[]) {
         digitalWrite(redLED, LOW);
         digitalWrite(grnLED, HIGH);
         digitalWrite(ylwLED, LOW);
-        //change states according to state diagram
         if (sensors[0] < frontDetectDist) {
+          // front wall detected, cannot continue following right wall
           topoState = topoErr;
         }
         else if (sensors[3] > wallDetectDist) {
-          angleAtTurn = RobotPos[2]; //right wall lost, turn right
+          //right wall lost, turn right
+          angleAtTurn = RobotPos[2]; 
           topoState = topoTurnR;
         }
         else { //keep following right wall
           //float err = 5-sensors[3];
-          //bangBang(err);
-          //PDcontrol(0);
-          //drive(-400);
+          //PDcontrol(err);
           reverse(inToSteps(18));
         }
         break;
@@ -731,7 +1088,7 @@ void topoFollowing(float sensors[]) {
 
           stepperRight.setSpeed(400);
           stepperLeft.setSpeed(400);
-          if (current == 'S') {
+          if (current == 'S') {//goto next state
             topoState = topoStraight;
           } else if (current == 'L') {
             //goToAngle(PI/2);
@@ -749,19 +1106,18 @@ void topoFollowing(float sensors[]) {
           topoPointer = topoPointer + 1;
         }
         else {
-          float err = 0;
-          if (sensors[2] > wallDetectDist && sensors[3] > wallDetectDist) {
-            err = 0;
-          } else if (sensors[2] < wallDetectDist && sensors[3] > wallDetectDist) {
-            err = sensors[2] - 5;
-          } else if (sensors[2] > wallDetectDist && sensors[3] < wallDetectDist) {
-            err = 5 - sensors[3];
-          } else {
-            err = (sensors[2] - sensors[3]) / 2;
-          }
-          //bangBang(err);
-          //PDcontrol(0);
-          //drive(-400);
+          //PD control for driving removed
+//          float err = 0;
+//          if (sensors[2] > wallDetectDist && sensors[3] > wallDetectDist) {
+//            err = 0;
+//          } else if (sensors[2] < wallDetectDist && sensors[3] > wallDetectDist) {
+//            err = sensors[2] - 5;
+//          } else if (sensors[2] > wallDetectDist && sensors[3] < wallDetectDist) {
+//            err = 5 - sensors[3];
+//          } else {
+//            err = (sensors[2] - sensors[3]) / 2;
+//          }
+          //PDcontrol(err);
           reverse(inToSteps(18));
         }
         break;
@@ -783,7 +1139,7 @@ void topoFollowing(float sensors[]) {
           //reverse(inToSteps(11));
           goToAngle(PI / 2);
           //reverse(inToSteps(9));
-          if (current == 'S') {
+          if (current == 'S') {//goto next state
             topoState = topoStraight;
           } else if (current == 'L') {
             topoState = topoFollowL;
@@ -817,7 +1173,7 @@ void topoFollowing(float sensors[]) {
           //reverse(inToSteps(11));
           goToAngle(-PI / 2);
           //reverse(inToSteps(9));
-          if (current == 'S') {
+          if (current == 'S') {//goto next state
             topoState = topoStraight;
           } else if (current == 'L') {
             topoState = topoFollowL;
@@ -836,7 +1192,7 @@ void topoFollowing(float sensors[]) {
         break;
 
 
-      case topoStop: //turn back around
+      case topoStop: //Reached termination direction, halt
         digitalWrite(redLED, LOW);
         digitalWrite(grnLED, LOW);
         digitalWrite(ylwLED, HIGH);
@@ -845,7 +1201,7 @@ void topoFollowing(float sensors[]) {
         break;
 
 
-      case topoErr:
+      case topoErr: //Invalid direction, halt
         digitalWrite(redLED, HIGH);
         digitalWrite(grnLED, LOW);
         digitalWrite(ylwLED, HIGH);
@@ -857,6 +1213,19 @@ void topoFollowing(float sensors[]) {
   }
 }
 
+/*
+ * Manual drive from GUI
+ * Parameter command recieved via bluetooth
+ * 3-bit number
+ * first bit determines speed
+ * - 0: small adjustments
+ * - 1: move entire square, 90 degree turns
+ * last 2 bits determine direction
+ * - 0: drive forward
+ * - 1: drive reverse
+ * - 2: turn left
+ * - 3: turn right
+ */
 void manualDrive(int command){
   int dir = command & 3;
   if((command & 4)>0){
@@ -1007,6 +1376,7 @@ void PDcontrol(float err) {
 
 /*
    Update global coordinates based on stepper moter data
+   Used for keeping track of robot position, not related to localization behavior
 */
 void localize() {
   long lPos = stepperLeft.currentPosition();

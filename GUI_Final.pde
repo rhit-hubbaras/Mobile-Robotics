@@ -1,13 +1,21 @@
+/***************************************************
+ * GUI_Final.pde
+ * Andrew Hubbard, Nithin Saravanapandian; Moravec 2/18/22
+ * GUI for controlling an arduino robot into demonstrating topological path following, metric path planning, mapping and localization.
+ * This program is designed to communicate with the program Final.ino
+ */
+
 //ECE435 Mobile Robotics - Moravec Final Project GUI
 
 import controlP5.*;  //importing ControlP5 library
 import processing.serial.*;
 
-// variables
+// global variables
 Serial port;
 ControlP5 cp5;
 String textfield = "";
 String status = "IDLE";
+// display parameters
 int robotx = 5;
 int roboty = 5;
 int grid_length = 500;
@@ -18,6 +26,7 @@ int gapwidth = 15;
 int tilewidth = (grid_width-5*gapwidth)/4;
 int wallwidth = 5;
 int wallheight = tilewidth;
+// world state variables
 byte[][] map = new byte[4][4];
 boolean slowManual = false;
 int startx = -1;
@@ -37,21 +46,13 @@ void setup() {
   
   size(1000,700);
   
-  //println("test");
   printArray(Serial.list()); //prints all available serial ports
   
   port = new Serial(this,"COM5",115200);
   
   cp5 = new ControlP5(this);
   
-  //cp5.addButton("LED_test")
-  //  .setPosition(700,200)
-  //  .setSize(100,80);
-    
-  //cp5.addButton("LED_Off")
-  //  .setPosition(700,400)
-  //  .setSize(100,80);
-  
+  //initialize buttons and GUI elements
   cp5.addButton("fwd")
      .setPosition(730,100)
      .setSize(25,25);
@@ -92,19 +93,6 @@ void setup() {
   cp5.addButton("Send_Map")
      .setPosition(gridposx,gridposy+grid_width+10)
      .setSize(150,50);
-     
-  map[0][0] = 9;
-  map[1][0] = 1;
-  map[2][0] = 1;
-  map[3][0] = 3;
-  map[3][1] = 2;
-  map[3][2] = 2;
-  map[3][3] = 6;
-  map[2][3] = 4;
-  map[1][3] = 4;
-  map[0][3] = 12;
-  map[0][2] = 8;
-  map[0][1] = 8;
 
   cp5.addTextfield("Start_Coord")
      .setPosition(450,615)
@@ -131,18 +119,33 @@ void setup() {
   cp5.addButton("Start_Localize")
      .setPosition(700,450)
      .setSize(200,50);
-     
-  //pathx[0] = 0;pathy[0] = 0;
-  //pathx[1] = 1;pathy[1] = 0;
-  //pathx[2] = 2;pathy[2] = 0;
-  //pathx[3] = 3;pathy[3] = 0;
-  //pathx[4] = 3;pathy[4] = 1;
-  //pathx[5] = 3;pathy[5] = 2;
-  //pathx[6] = 2;pathy[6] = 2;
-  //pathLen = 7;
+   
+  //Start map with walls on outside
+  map[0][0] = 9;
+  map[1][0] = 1;
+  map[2][0] = 1;
+  map[3][0] = 3;
+  map[3][1] = 2;
+  map[3][2] = 2;
+  map[3][3] = 6;
+  map[2][3] = 4;
+  map[1][3] = 4;
+  map[0][3] = 12;
+  map[0][2] = 8;
+  map[0][1] = 8;
+  
   delay(1000);
 }
 
+/*
+ * Check bluetooth for information
+ * First character determines the type of information recieved
+ * s - Robot Status
+ * p - intended path
+ * r - current robot position
+ * m - percieved map
+ * t - percieved start position
+ */
 void serialEvent (Serial port){
   String message = port.readStringUntil('\n');
   if(message == null){
@@ -178,8 +181,17 @@ void serialEvent (Serial port){
           }
         }
   }
+  if(message.charAt(0)=='t'){
+    
+    startx = message.charAt(1)-'A';
+    starty = message.charAt(2)-'A';
+    
+  }
 }
 
+/*
+ * Draw loop for all non-button UI elements
+ */
 void draw() {
   fill(200);
   rect(0,0,1000,1000);
@@ -196,6 +208,9 @@ void draw() {
   rect(700,160,85,15);
 }
 
+/*
+ * Draw map, robot, start/goal positions, and intended path
+ */
 void drawGrid(){
   fill(153);
   rect(gridposx,gridposy,grid_width,grid_width);
@@ -254,11 +269,13 @@ void drawGrid(){
   }
 }
 
+//Send topological path following route
 public void Topo_Path(String text) {
   println("received input value: " + text);
   port.write("t"+ text + "\n");
 }
 
+//Send start position; set robot position to start
 public void Start_Coord(String text) {
   println("start coords: " + text);
   startx = int(text.charAt(0))-'0';
@@ -267,6 +284,8 @@ public void Start_Coord(String text) {
   curry = starty;
   port.write("s"+ text + "\n");
 }
+
+//Send goal position
 public void Goal_Coord(String text) {
   println("goal coords: " + text);
   goalx = int(text.charAt(0))-48;
@@ -274,10 +293,12 @@ public void Goal_Coord(String text) {
   port.write("f"+ text + "\n");
 }
 
+//Send cease-all command
 void STOP(){
   port.write("c\n");
 }
 
+//Send map
 void Send_Map(){
   port.write('m');
   for(int i=0;i<4;i++){
@@ -288,10 +309,12 @@ void Send_Map(){
   port.write('\n');
 }
 
+//Start metric path planning to goal
 void Go_To_Goal(){
   port.write("g\n");
 }
 
+//Start mapping behavior; write map to empty/unknown
 void Start_Mapping(){
   port.write("mQQQQQQQQQQQQQQQQ\n");
   for(int i=0;i<4;i++){
@@ -302,42 +325,46 @@ void Start_Mapping(){
   port.write("n\n");
 }
 
+//Start localization behavior
 void Start_Localize(){
   port.write("l\n");
 }
 
+//Send manual drive commands
 void fwd(){port.write('d');if(slowManual){port.write(0+'A');}else{port.write(4+'A');}port.write('\n');}
 void bck(){port.write('d');if(slowManual){port.write(1+'A');}else{port.write(5+'A');}port.write('\n');}
 void lft(){port.write('d');if(slowManual){port.write(2+'A');}else{port.write(6+'A');}port.write('\n');}
 void rgt(){port.write('d');if(slowManual){port.write(3+'A');}else{port.write(7+'A');}port.write('\n');}
 
+//toggle full-space vs small-adjustment manual behavior
 void slo(){
   if(slowManual){slowManual = false;}
   else{slowManual = true;}
 }
 
-void H00(){if((map[0][0]&2)>0){map[0][0]-=2;map[1][0]-=8;}else{map[0][0]+=2;map[1][0]+=8;}}
-void H10(){if((map[1][0]&2)>0){map[1][0]-=2;map[2][0]-=8;}else{map[1][0]+=2;map[2][0]+=8;}}
-void H20(){if((map[2][0]&2)>0){map[2][0]-=2;map[3][0]-=8;}else{map[2][0]+=2;map[3][0]+=8;}}
-void H01(){if((map[0][1]&2)>0){map[0][1]-=2;map[1][1]-=8;}else{map[0][1]+=2;map[1][1]+=8;}}
-void H11(){if((map[1][1]&2)>0){map[1][1]-=2;map[2][1]-=8;}else{map[1][1]+=2;map[2][1]+=8;}}
-void H21(){if((map[2][1]&2)>0){map[2][1]-=2;map[3][1]-=8;}else{map[2][1]+=2;map[3][1]+=8;}}
-void H02(){if((map[0][2]&2)>0){map[0][2]-=2;map[1][2]-=8;}else{map[0][2]+=2;map[1][2]+=8;}}
-void H12(){if((map[1][2]&2)>0){map[1][2]-=2;map[2][2]-=8;}else{map[1][2]+=2;map[2][2]+=8;}}
-void H22(){if((map[2][2]&2)>0){map[2][2]-=2;map[3][2]-=8;}else{map[2][2]+=2;map[3][2]+=8;}}
-void H03(){if((map[0][3]&2)>0){map[0][3]-=2;map[1][3]-=8;}else{map[0][3]+=2;map[1][3]+=8;}}
-void H13(){if((map[1][3]&2)>0){map[1][3]-=2;map[2][3]-=8;}else{map[1][3]+=2;map[2][3]+=8;}}
-void H23(){if((map[2][3]&2)>0){map[2][3]-=2;map[3][3]-=8;}else{map[2][3]+=2;map[3][3]+=8;}}
+//toggle walls in map
+void H00(){if((map[0][0]&2)>0){map[0][0]&=15-2;map[1][0]&=15-8;}else{map[0][0]|=2;map[1][0]|=8;}}
+void H10(){if((map[1][0]&2)>0){map[1][0]&=15-2;map[2][0]&=15-8;}else{map[1][0]|=2;map[2][0]|=8;}}
+void H20(){if((map[2][0]&2)>0){map[2][0]&=15-2;map[3][0]&=15-8;}else{map[2][0]|=2;map[3][0]|=8;}}
+void H01(){if((map[0][1]&2)>0){map[0][1]&=15-2;map[1][1]&=15-8;}else{map[0][1]|=2;map[1][1]|=8;}}
+void H11(){if((map[1][1]&2)>0){map[1][1]&=15-2;map[2][1]&=15-8;}else{map[1][1]|=2;map[2][1]|=8;}}
+void H21(){if((map[2][1]&2)>0){map[2][1]&=15-2;map[3][1]&=15-8;}else{map[2][1]|=2;map[3][1]|=8;}}
+void H02(){if((map[0][2]&2)>0){map[0][2]&=15-2;map[1][2]&=15-8;}else{map[0][2]|=2;map[1][2]|=8;}}
+void H12(){if((map[1][2]&2)>0){map[1][2]&=15-2;map[2][2]&=15-8;}else{map[1][2]|=2;map[2][2]|=8;}}
+void H22(){if((map[2][2]&2)>0){map[2][2]&=15-2;map[3][2]&=15-8;}else{map[2][2]|=2;map[3][2]|=8;}}
+void H03(){if((map[0][3]&2)>0){map[0][3]&=15-2;map[1][3]&=15-8;}else{map[0][3]|=2;map[1][3]|=8;}}
+void H13(){if((map[1][3]&2)>0){map[1][3]&=15-2;map[2][3]&=15-8;}else{map[1][3]|=2;map[2][3]|=8;}}
+void H23(){if((map[2][3]&2)>0){map[2][3]&=15-2;map[3][3]&=15-8;}else{map[2][3]|=2;map[3][3]|=8;}}
 
-void V00(){if((map[0][0]&4)>0){map[0][0]-=4;map[0][1]-=1;}else{map[0][0]+=4;map[0][1]+=1;}}
-void V01(){if((map[0][1]&4)>0){map[0][1]-=4;map[0][2]-=1;}else{map[0][1]+=4;map[0][2]+=1;}}
-void V02(){if((map[0][2]&4)>0){map[0][2]-=4;map[0][3]-=1;}else{map[0][2]+=4;map[0][3]+=1;}}
-void V10(){if((map[1][0]&4)>0){map[1][0]-=4;map[1][1]-=1;}else{map[1][0]+=4;map[1][1]+=1;}}
-void V11(){if((map[1][1]&4)>0){map[1][1]-=4;map[1][2]-=1;}else{map[1][1]+=4;map[1][2]+=1;}}
-void V12(){if((map[1][2]&4)>0){map[1][2]-=4;map[1][3]-=1;}else{map[1][2]+=4;map[1][3]+=1;}}
-void V20(){if((map[2][0]&4)>0){map[2][0]-=4;map[2][1]-=1;}else{map[2][0]+=4;map[2][1]+=1;}}
-void V21(){if((map[2][1]&4)>0){map[2][1]-=4;map[2][2]-=1;}else{map[2][1]+=4;map[2][2]+=1;}}
-void V22(){if((map[2][2]&4)>0){map[2][2]-=4;map[2][3]-=1;}else{map[2][2]+=4;map[2][3]+=1;}}
-void V30(){if((map[3][0]&4)>0){map[3][0]-=4;map[3][1]-=1;}else{map[3][0]+=4;map[3][1]+=1;}}
-void V31(){if((map[3][1]&4)>0){map[3][1]-=4;map[3][2]-=1;}else{map[3][1]+=4;map[3][2]+=1;}}
-void V32(){if((map[3][2]&4)>0){map[3][2]-=4;map[3][3]-=1;}else{map[3][2]+=4;map[3][3]+=1;}}
+void V00(){if((map[0][0]&4)>0){map[0][0]&=15-4;map[0][1]&=15-1;}else{map[0][0]|=4;map[0][1]|=1;}}
+void V01(){if((map[0][1]&4)>0){map[0][1]&=15-4;map[0][2]&=15-1;}else{map[0][1]|=4;map[0][2]|=1;}}
+void V02(){if((map[0][2]&4)>0){map[0][2]&=15-4;map[0][3]&=15-1;}else{map[0][2]|=4;map[0][3]|=1;}}
+void V10(){if((map[1][0]&4)>0){map[1][0]&=15-4;map[1][1]&=15-1;}else{map[1][0]|=4;map[1][1]|=1;}}
+void V11(){if((map[1][1]&4)>0){map[1][1]&=15-4;map[1][2]&=15-1;}else{map[1][1]|=4;map[1][2]|=1;}}
+void V12(){if((map[1][2]&4)>0){map[1][2]&=15-4;map[1][3]&=15-1;}else{map[1][2]|=4;map[1][3]|=1;}}
+void V20(){if((map[2][0]&4)>0){map[2][0]&=15-4;map[2][1]&=15-1;}else{map[2][0]|=4;map[2][1]|=1;}}
+void V21(){if((map[2][1]&4)>0){map[2][1]&=15-4;map[2][2]&=15-1;}else{map[2][1]|=4;map[2][2]|=1;}}
+void V22(){if((map[2][2]&4)>0){map[2][2]&=15-4;map[2][3]&=15-1;}else{map[2][2]|=4;map[2][3]|=1;}}
+void V30(){if((map[3][0]&4)>0){map[3][0]&=15-4;map[3][1]&=15-1;}else{map[3][0]|=4;map[3][1]|=1;}}
+void V31(){if((map[3][1]&4)>0){map[3][1]&=15-4;map[3][2]&=15-1;}else{map[3][1]|=4;map[3][2]|=1;}}
+void V32(){if((map[3][2]&4)>0){map[3][2]&=15-4;map[3][3]&=15-1;}else{map[3][2]|=4;map[3][3]|=1;}}
